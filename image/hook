@@ -3,6 +3,7 @@
 # and retries it with backoff until it succeeds. It links the checkout into /config, installs the
 # integrations and cards CI built, and reloads Home Assistant, or restarts it when integrations changed.
 set -euo pipefail
+export LC_ALL=C
 
 config=/config
 current=.git-sync/current
@@ -11,7 +12,7 @@ ha_url=${HA_URL:-http://localhost:8123}
 token_file=${HA_TOKEN_FILE:-/etc/git-secret/ha-token}
 commit=${GITSYNC_HASH:?}
 
-mkdir -p "$state"
+mkdir -p "$state/notifications"
 
 record() {
   printf '%s\n' "$2" > "$state/.$1"
@@ -59,17 +60,40 @@ json() {
   value=${value//$'\n'/\\n}
   value=${value//$'\r'/}
   value=${value//$'\t'/ }
+  value=${value//[$'\001'-$'\037']/}
   printf '"%s"' "$value"
 }
 
-notify() {
-  local status
-  status=$(api services/persistent_notification/create --data \
-    "{\"notification_id\": \"git_sync_$1\", \"title\": $(json "$2"), \"message\": $(json "$3")}")
-  if [[ $status != 200 ]]; then
-    echo "Creating notification $1 failed with HTTP $status" >&2
-    return 1
+# Home Assistant's last answer, cut to 1000 bytes without ending in part of a character.
+excerpt() {
+  local text
+  text=$(head -c 1000 "$state/response")
+  if (($(wc -c < "$state/response") > 1000)); then
+    while [[ $text == *[$'\x80'-$'\xff'] ]]; do
+      text=${text%?}
+    done
   fi
+  printf '%s' "$text"
+}
+
+# Queue a persistent notification. Queued, a failed delivery is retried without repeating what the hook did.
+notify() {
+  printf '{"notification_id": "git_sync_%s", "title": %s, "message": %s}\n' "$1" "$(json "$2")" "$(json "$3")" \
+    > "$state/notifications/.$1"
+  mv "$state/notifications/.$1" "$state/notifications/$1"
+}
+
+send_notifications() {
+  local file status
+  for file in "$state/notifications"/*; do
+    [[ -f $file ]] || continue
+    status=$(api services/persistent_notification/create --data-binary @"$file")
+    answered "$status"
+    if [[ $status != 200 ]]; then
+      echo "Home Assistant rejected the notification ${file##*/} (HTTP $status): $(excerpt)" >&2
+    fi
+    rm "$file"
+  done
 }
 
 aside() {
@@ -163,6 +187,7 @@ if [[ -z $built_from ]]; then
 build, so nothing was installed or reloaded. The next CI run on the main branch restores it."
     record reloaded "$commit"
   fi
+  send_notifications
   exit 0
 fi
 
@@ -212,9 +237,10 @@ if [[ $(recorded reloaded) != "$commit" ]]; then
       echo "Restarting Home Assistant with ${built_from:0:7}, because integrations changed"
       rm "$state/restart"
     else
-      notify restart "Home Assistant not restarted" "Restarting with ${built_from:0:7} failed with HTTP \
-$status, so Home Assistant runs the old integrations until the next deploy restarts it: \
-$(head -c 1000 "$state/response")"
+      notify restart "Home Assistant not restarted" "Home Assistant refused to restart with \
+${built_from:0:7} (HTTP $status), so it keeps running the integrations it had, and the next deploy tries again. \
+It checks the configuration with the integrations it runs, so if its answer is about an integration this deploy \
+changed, restart Home Assistant yourself."$'\n\n'"$(excerpt)"
     fi
   else
     status=$(api services/homeassistant/reload_all --data '{}')
@@ -223,7 +249,7 @@ $(head -c 1000 "$state/response")"
       echo "Reloaded Home Assistant with ${built_from:0:7}"
     else
       notify reload "Configuration not reloaded" \
-        "Reloading ${built_from:0:7} failed with HTTP $status: $(head -c 1000 "$state/response")"
+        "Reloading ${built_from:0:7} failed with HTTP $status: $(excerpt)"
     fi
   fi
   record reloaded "$commit"
@@ -240,3 +266,4 @@ if ((${#orphans[@]})); then
 but it loads its configuration from Git. Move the changes to the configuration repository and delete \
 the files."
 fi
+send_notifications
