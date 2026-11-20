@@ -35,7 +35,7 @@ jobs:
           git_sync=$(sed -n 's|^FROM registry.k8s.io/git-sync/git-sync:\(v[^@]*\)@.*|\1|p' Dockerfile)
           {
             echo "version=${GITHUB_REF_NAME#v}"
-            echo "description=git-sync ${git_sync} sidecar that deploys a Home Assistant configuration from Git and reloads it"
+            echo "description=git-sync ${git_sync} sidecar that deploys a Home Assistant configuration from Git and reloads or restarts Home Assistant"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Image metadata
