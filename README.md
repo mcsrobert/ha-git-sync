@@ -13,8 +13,8 @@ main ─────────> check ─> promote ─> deployed ─> sidecar 
 - **`promote`**, a GitHub Action, commits the tree `check` built on `main` to the `deployed` branch.
 - **The sidecar** runs next to Home Assistant. It is [git-sync](https://github.com/kubernetes/git-sync) following
   `deployed`, plus a hook that puts the checkout in `/config` and calls `homeassistant.reload_all`. When custom
-  integrations change, it calls `homeassistant.restart` instead, because Home Assistant loads them only at startup.
-  Both check the configuration first and leave Home Assistant running as it was if it is not valid.
+  integrations change while Home Assistant runs, it calls `homeassistant.restart` instead, because Home Assistant
+  loads them only at startup. Home Assistant checks the configuration first and refuses either when it is not valid.
 
 ## What gets written where
 
@@ -32,8 +32,9 @@ The UI editors still save `automations.yaml`, `scripts.yaml` and `scenes.yaml` t
 load them. The hook raises a notification when one appears, so you can move the change into Git and delete the file.
 
 The hook also raises a notification when a reload or restart fails, and when `deployed` points at a commit `promote`
-did not make. It does not install or reload such a commit, and the next run on `main` restores `deployed`. A restart
-that fails stays due, so the next deploy restarts instead of reloading.
+did not make. It does not install or reload such a commit, and the next run on `main` restores `deployed`. A refused
+restart stays due, so the next deploy restarts instead of reloading. Home Assistant checks the configuration with the
+integrations it runs, so when a configuration change needs the new ones, restart Home Assistant yourself.
 
 ## Your repository
 
@@ -202,8 +203,8 @@ trusts GitHub's SSH host keys; for another Git host, mount its keys and set `GIT
 
 - Revert the change on `main`. CI checks and promotes the revert.
 - To go back without waiting for CI, push an earlier deploy: `git push --force origin <commit>:deployed`. It keeps its
-  `Source-Commit:` trailer, so the hook installs and reloads it. The next run on `main`, at the latest the nightly
-  one, deploys `main` again.
+  `Source-Commit:` trailer, so the hook installs it and reloads or restarts Home Assistant. The next run on `main`, at
+  the latest the nightly one, deploys `main` again.
 
 ## Development
 
