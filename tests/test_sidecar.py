@@ -28,14 +28,17 @@ class HomeAssistant:
     def __init__(self):
         self.state = 'STARTING'
         self.status = 200
+        self.message = 'The configuration is not valid'
         self.restart_closes = True
+        self.drop_notifications = False
         self.calls = []
+        self.notes = []
         self.httpd = None
         ha = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def respond(self, status, body):
-                data = json.dumps(body).encode()
+                data = json.dumps(body, ensure_ascii=False).encode()
                 self.send_response(status)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(data)))
@@ -49,13 +52,21 @@ class HomeAssistant:
                 self.respond(200, {'state': ha.state, 'version': '2026.10.4'})
 
             def do_POST(self):
-                body = self.rfile.read(int(self.headers.get('Content-Length', 0))).decode()
+                body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
                 ha.calls.append(('POST', self.path, self.headers.get('Authorization'), body))
                 if self.headers.get('Authorization') != f'Bearer {TOKEN}':
                     return self.respond(401, {'message': 'unauthorized'})
-                json.loads(body)
+                try:
+                    data = json.loads(body.decode())
+                except ValueError:
+                    return self.respond(400, {'message': 'Data should be valid JSON.'})
+                if self.path.endswith('/persistent_notification/create'):
+                    if ha.drop_notifications:
+                        self.close_connection = True
+                        return
+                    ha.notes.append(data)
                 if self.path.endswith(('/reload_all', '/restart')) and ha.status != 200:
-                    return self.respond(ha.status, {'message': 'The configuration is not valid'})
+                    return self.respond(ha.status, {'message': ha.message})
                 if self.path.endswith('/restart') and ha.restart_closes:
                     self.close_connection = True
                     return
@@ -86,8 +97,7 @@ class HomeAssistant:
         return [call for call in self.calls if call[0] == 'POST' and call[1].endswith(suffix)]
 
     def notifications(self, name=None):
-        notes = [json.loads(call[3]) for call in self.posts('/persistent_notification/create')]
-        return [note for note in notes if name is None or note['notification_id'] == f'git_sync_{name}']
+        return [note for note in self.notes if name is None or note['notification_id'] == f'git_sync_{name}']
 
 
 def wait(condition, what, timeout=60):
@@ -317,6 +327,31 @@ class SidecarTest(unittest.TestCase):
         community.chmod(0o755)
         self.assertEqual(self.hook(halfway).returncode, 0)
         self.assertEqual(len(self.ha.posts('/restart')), 3, 'lost the restart when the hook failed halfway')
+
+    def test_retries_notifications_without_repeating_the_deploy(self):
+        self.ha.start()
+        self.ha.state = 'RUNNING'
+        plain = self.deploy({'configuration.yaml': 'v1\n'}, source='a' * 40)
+        self.assertEqual(self.hook(plain).returncode, 0)
+
+        self.ha.status = 502
+        self.ha.drop_notifications = True
+        refused = self.deploy({'custom_components/retry/manifest.json': 'v1'}, source='b' * 40)
+        for _ in range(2):
+            result = self.hook(refused)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('not reachable', result.stderr)
+        self.assertEqual(len(self.ha.posts('/restart')), 1, 'repeated the restart to retry a notification')
+        self.ha.drop_notifications = False
+        self.assertEqual(self.hook(refused).returncode, 0)
+        self.assertIn('HTTP 502', self.ha.notifications('restart')[0]['message'])
+
+        self.ha.status = 500
+        self.ha.message = 'x' * 5 + 'K\u00fcche ' * 400
+        cut = self.deploy({'configuration.yaml': 'v2\n'}, source='c' * 40)
+        self.assertEqual(self.hook(cut).returncode, 0)
+        self.assertEqual(len(self.ha.notifications('restart')), 2, 'a notification cut in a character was rejected')
+        self.assertIn('K\u00fcche K', self.ha.notifications('restart')[1]['message'])
 
     def test_restarts_quietly_and_retries_failed_hooks(self):
         self.ha.start()
