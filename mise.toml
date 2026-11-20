@@ -1,0 +1,24 @@
+[tools]
+gitleaks = "8.30.1"
+shellcheck = "0.11.0"
+uv = "0.13.7"
+zizmor = "1.32.0"
+
+[tasks.test]
+description = "Run the unit tests"
+run = "PYTHONPATH=. uv run --quiet --no-project --with-requirements tests/requirements.txt python -P -m unittest discover -s tests"
+
+[tasks.e2e]
+description = "Build the image and run the sidecar tests against it in Docker"
+run = """
+docker build --quiet --tag ha-git-sync:dev .
+HA_GIT_SYNC_IMAGE=ha-git-sync:dev PYTHONPATH=. uv run --quiet --no-project --with-requirements tests/requirements.txt python -P -m unittest discover -s tests -p test_sidecar.py -v
+"""
+
+[tasks.lint]
+description = "Lint the scripts, workflows and actions"
+run = "shellcheck image/hook image/ready check/*.sh promote/*.sh && zizmor --quiet ."
+
+[tasks.check-config]
+description = "Check a configuration repository: mise run check-config -- PATH HOME_ASSISTANT_VERSION"
+run = "check/local.sh"

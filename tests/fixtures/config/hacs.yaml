@@ -1,0 +1,9 @@
+integrations:
+  - repository: amitfin/retry
+    version: v4.2.0
+    asset: retry.zip
+
+cards:
+  - repository: RomRider/apexcharts-card
+    version: v2.2.3
+    asset: apexcharts-card.js

@@ -1,0 +1,6 @@
+toggle_guest_mode:
+  alias: Toggle guest mode
+  sequence:
+    - action: input_boolean.toggle
+      target:
+        entity_id: input_boolean.guest_mode

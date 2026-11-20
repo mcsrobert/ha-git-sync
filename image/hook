@@ -1,0 +1,218 @@
+#!/bin/bash
+# git-sync's exechook. git-sync runs it in the new worktree after every sync and when it starts,
+# and retries it with backoff until it succeeds. It links the checkout into /config, installs the
+# integrations and cards CI built, and reloads Home Assistant.
+set -euo pipefail
+
+config=/config
+current=.git-sync/current
+state=$config/.git-sync/state
+ha_url=${HA_URL:-http://localhost:8123}
+token_file=${HA_TOKEN_FILE:-/etc/git-secret/ha-token}
+commit=${GITSYNC_HASH:?}
+
+mkdir -p "$state"
+
+record() {
+  printf '%s\n' "$2" > "$state/.$1"
+  mv "$state/.$1" "$state/$1"
+}
+
+recorded() {
+  cat "$state/$1" 2> /dev/null || true
+}
+
+api() {
+  curl --silent --show-error --max-time 120 --output "$state/response" --write-out '%{http_code}' \
+    --header @<(printf 'Authorization: Bearer %s\n' "$(< "$token_file")") \
+    --header 'Content-Type: application/json' "${@:2}" "$ha_url/api/$1" || true
+}
+
+json() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//$'\n'/\\n}
+  value=${value//$'\r'/}
+  value=${value//$'\t'/ }
+  printf '"%s"' "$value"
+}
+
+notify() {
+  local status
+  status=$(api services/persistent_notification/create --data \
+    "{\"notification_id\": \"git_sync_$1\", \"title\": $(json "$2"), \"message\": $(json "$3")}")
+  if [[ $status != 200 ]]; then
+    echo "Creating notification $1 failed with HTTP $status" >&2
+    return 1
+  fi
+}
+
+aside() {
+  local backup=$1.pre-git
+  if [[ -e $backup || -L $backup ]]; then
+    backup=$1.pre-git.$(date +%Y%m%d%H%M%S)
+  fi
+  if ! mv "$1" "$backup"; then
+    echo "Cannot move $1 aside; give this container write access to ${1%/*}, or move it yourself" >&2
+    exit 1
+  fi
+  echo "Moved $1 to $backup"
+}
+
+# Link each top-level entry of the checkout into /config, except hidden ones and the folders install fills.
+link() {
+  local entry
+  for entry in *; do
+    if [[ ! -e $entry || $entry == custom_components || $entry == www ]]; then
+      continue
+    fi
+    if [[ -L $config/$entry && $(readlink "$config/$entry") == "$current/$entry" ]]; then
+      continue
+    fi
+    if [[ -e $config/$entry || -L $config/$entry ]]; then
+      aside "$config/$entry"
+    fi
+    ln -s "$current/$entry" "$config/$entry"
+    echo "Linked $entry"
+  done
+  for entry in "$config"/*; do
+    if [[ -L $entry && $(readlink "$entry") == "$current/${entry##*/}" && ! -e ${entry##*/} ]]; then
+      rm "$entry"
+      echo "Removed the link ${entry##*/}"
+    fi
+  done
+}
+
+# Make $1 a folder only this hook writes; its .git-sync marker records what it installed.
+own() {
+  if [[ -f $1/.git-sync ]]; then
+    return
+  fi
+  if [[ -e $1 || -L $1 ]]; then
+    aside "$1"
+  fi
+  mkdir "$1"
+  : > "$1/.git-sync"
+}
+
+# Replace everything in $2 with the folders of $1 in this commit, unless its marker shows they are installed.
+install() {
+  local source=$1 target=$2 want have entry name
+  want=$(git rev-parse --verify --quiet "$commit:$source" || true)
+  have=$(cat "$target/.git-sync")
+  if [[ $want == "$have" ]]; then
+    return
+  fi
+  for entry in "$target"/* "$target"/.[!.]*; do
+    name=${entry##*/}
+    if [[ -e $entry && $name != .git-sync && ($name == .* || ! -d $source/$name) ]]; then
+      rm -rf "$entry"
+    fi
+  done
+  for entry in "$source"/*/; do
+    [[ -d $entry ]] || continue
+    name=$(basename "$entry")
+    cp -R "$source/$name" "$target/.$name.new"
+    if [[ -e $target/$name ]]; then
+      mv "$target/$name" "$target/.$name.old"
+    fi
+    mv "$target/.$name.new" "$target/$name"
+    rm -rf "$target/.$name.old"
+  done
+  printf '%s\n' "$want" > "$target/.git-sync.new"
+  mv "$target/.git-sync.new" "$target/.git-sync"
+  echo "Installed $source from ${commit:0:7}"
+  if [[ -n $have ]]; then
+    record restart "$built_from"
+  fi
+}
+
+built_from=$(git log -1 --format='%(trailers:key=Source-Commit,valueonly)' "$commit" | head -n 1)
+if [[ -z $built_from ]]; then
+  echo "${commit:0:7} has no Source-Commit trailer, so CI did not build it; not installing or reloading"
+  record installed "$commit"
+  if [[ $(recorded reloaded) != "$commit" ]]; then
+    notify deploy "Configuration not deployed" "The deployed branch is at ${commit:0:7}, which CI did not \
+build, so nothing was installed or reloaded. The next CI run on the main branch restores it."
+    record reloaded "$commit"
+  fi
+  exit 0
+fi
+
+if [[ -z $(recorded installed) ]]; then
+  for name in automations.yaml scripts.yaml scenes.yaml; do
+    if [[ -f $config/$name && ! -L $config/$name ]]; then
+      aside "$config/$name"
+    fi
+  done
+fi
+link
+if [[ ! -d $config/www ]]; then
+  mkdir -m 2775 "$config/www"
+fi
+own "$config/custom_components"
+own "$config/www/community"
+install custom_components "$config/custom_components"
+install www/community "$config/www/community"
+record installed "$commit"
+
+if [[ $(recorded reloaded) != "$commit" ]]; then
+  status=$(api config)
+  case $status in
+    200) ;;
+    000)
+      echo "Home Assistant is not reachable at $ha_url; retrying the reload later" >&2
+      exit 1
+      ;;
+    401 | 403)
+      echo "Home Assistant rejected the token (HTTP $status)" >&2
+      exit 1
+      ;;
+    *)
+      echo "Home Assistant answered HTTP $status; retrying the reload later" >&2
+      exit 1
+      ;;
+  esac
+  if ! grep -q '"state": *"RUNNING"' "$state/response"; then
+    echo "Home Assistant is still starting; retrying the reload later" >&2
+    exit 1
+  fi
+  status=$(api services/homeassistant/reload_all --data '{}')
+  case $status in
+    200)
+      echo "Reloaded Home Assistant with ${built_from:0:7}"
+      ;;
+    000)
+      echo "Home Assistant is not reachable at $ha_url; retrying the reload later" >&2
+      exit 1
+      ;;
+    401 | 403)
+      echo "Home Assistant rejected the token (HTTP $status)" >&2
+      exit 1
+      ;;
+    *)
+      notify reload "Configuration not reloaded" \
+        "Reloading ${built_from:0:7} failed with HTTP $status: $(head -c 1000 "$state/response")"
+      ;;
+  esac
+  record reloaded "$commit"
+fi
+
+if [[ -s $state/restart ]]; then
+  notify restart "Restart Home Assistant" "Integrations or cards changed in $(cut -c 1-7 "$state/restart"). \
+Home Assistant runs the old code until it restarts."
+  rm -f "$state/restart"
+fi
+
+orphans=()
+for name in automations.yaml scripts.yaml scenes.yaml; do
+  if [[ -f $config/$name && ! -L $config/$name ]]; then
+    orphans+=("$name")
+  fi
+done
+if ((${#orphans[@]})); then
+  notify editor "Changes made in the UI are not loaded" "Home Assistant saved ${orphans[*]} in /config, \
+but it loads its configuration from Git. Move the changes to the configuration repository and delete \
+the files."
+fi

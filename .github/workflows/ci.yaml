@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install shellcheck and zizmor
+        run: |
+          version() { sed -n "s/^$1 = \"\(.*\)\"/\1/p" mise.toml; }
+          shellcheck=$(version shellcheck)
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${shellcheck}/shellcheck-v${shellcheck}.linux.x86_64.tar.xz" \
+            | tar -xJ -C "${RUNNER_TEMP}" --strip-components 1 "shellcheck-v${shellcheck}/shellcheck"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+          pipx install "zizmor==$(version zizmor)"
+      - name: Run shellcheck
+        run: shellcheck image/hook image/ready check/*.sh promote/*.sh
+      - name: Run zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: zizmor --format github .
+      - name: Compare the baked known_hosts with GitHub's SSH keys
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: diff <(gh api meta --jq '.ssh_keys[] | "github.com " + .') image/github_known_hosts
+
+  test:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+      - name: Install test dependencies
+        run: python -P -m pip install --disable-pip-version-check --quiet -r tests/requirements.txt
+      - name: Build the image
+        run: docker build --quiet --tag ha-git-sync:test .
+      - name: Run tests
+        env:
+          HA_GIT_SYNC_IMAGE: ha-git-sync:test
+          PYTHONPATH: .
+        run: python -P -m unittest discover -s tests -v
+
+  action:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: ha-git-sync
+          persist-credentials: false
+      - name: Create a configuration repository from the fixture
+        run: |
+          cp -R ha-git-sync/tests/fixtures/config/. .
+          git init -q -b main
+          git add -A
+          git -c user.name=ci -c user.email=ci@example.com commit -q -m 'Add the fixture'
+      - name: Check the fixture
+        uses: $/check
+        with:
+          home-assistant-version: 2026.10.4
+          secrets: .github/check-secrets.yaml

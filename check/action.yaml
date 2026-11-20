@@ -1,0 +1,86 @@
+name: Check Home Assistant configuration
+description: Builds the deploy tree from the checked-out configuration repository and hacs.yaml, scans the history for leaked secrets and runs Home Assistant's check_config on it.
+author: mcsrobert
+branding:
+  icon: check-circle
+  color: blue
+
+inputs:
+  home-assistant-version:
+    description: The Home Assistant release that runs the configuration, such as 2026.10.4.
+    required: true
+  secrets:
+    description: YAML file with typed values for secrets that must not be strings, such as a latitude.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve the Python version
+      id: python
+      shell: bash
+      env:
+        VERSION: ${{ inputs.home-assistant-version }}
+      run: echo "version=$("${GITHUB_ACTION_PATH}/resolve-python.sh" "${VERSION}")" >> "${GITHUB_OUTPUT}"
+
+    - name: Set up Python
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+      with:
+        python-version: ${{ steps.python.outputs.version }}
+
+    - name: Scan the history for secrets
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        version=$(sed -n 's/^gitleaks = "\(.*\)"/\1/p' "${GITHUB_ACTION_PATH}/../mise.toml")
+        asset="gitleaks_${version}_linux_x64.tar.gz"
+        digest=$(gh api "repos/gitleaks/gitleaks/releases/tags/v${version}" \
+          --jq ".assets[] | select(.name == \"${asset}\") | .digest")
+        mkdir -p "${RUNNER_TEMP}/ha-git-sync"
+        curl -fsSL -o "${RUNNER_TEMP}/ha-git-sync/${asset}" \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${version}/${asset}"
+        echo "${digest#sha256:}  ${RUNNER_TEMP}/ha-git-sync/${asset}" | sha256sum --check --quiet
+        tar -xzf "${RUNNER_TEMP}/ha-git-sync/${asset}" -C "${RUNNER_TEMP}/ha-git-sync" gitleaks
+        "${RUNNER_TEMP}/ha-git-sync/gitleaks" git --no-banner --redact .
+
+    - name: Install Home Assistant
+      shell: bash
+      env:
+        VERSION: ${{ inputs.home-assistant-version }}
+      run: |
+        python -P -m pip install --disable-pip-version-check --quiet "homeassistant==${VERSION}"
+        read -ra requirements < <(python -P -c \
+          'from homeassistant.scripts.check_config import REQUIREMENTS; print(*REQUIREMENTS)')
+        python -P -m pip install --disable-pip-version-check --quiet "${requirements[@]}"
+
+    - name: Build the deploy tree
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: PYTHONPATH="${GITHUB_ACTION_PATH}/.." python -P -m ha_git_sync build . "${RUNNER_TEMP}/ha-git-sync/deploy"
+
+    - name: Check the configuration
+      shell: bash
+      env:
+        SECRETS: ${{ inputs.secrets }}
+      run: |
+        args=()
+        if [[ -n ${SECRETS} ]]; then
+          args=(--secrets "${SECRETS}")
+        fi
+        PYTHONPATH="${GITHUB_ACTION_PATH}/.." python -P -m ha_git_sync check "${RUNNER_TEMP}/ha-git-sync/deploy" "${args[@]}"
+
+    - name: Package the deploy tree
+      if: github.event_name != 'pull_request'
+      shell: bash
+      run: tar -C "${RUNNER_TEMP}/ha-git-sync/deploy" -cf "${RUNNER_TEMP}/ha-git-sync/deploy.tar" .
+
+    - name: Upload the deploy tree
+      if: github.event_name != 'pull_request'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ha-git-sync-deploy
+        path: ${{ runner.temp }}/ha-git-sync/deploy.tar
+        retention-days: 1

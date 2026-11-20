@@ -1,0 +1,13 @@
+homeassistant:
+  name: !secret home_name
+  latitude: !secret home_latitude
+  longitude: 4.88
+  elevation: 1
+  unit_system: metric
+  time_zone: Europe/Amsterdam
+
+automation: !include_dir_merge_list automations
+script: !include_dir_merge_named scripts
+input_boolean:
+  guest_mode:
+    name: Guest mode

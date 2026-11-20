@@ -1,0 +1,23 @@
+name: Promote Home Assistant configuration
+description: Commits the deploy tree the check action built in this run to the deployed branch, which the ha-git-sync image follows.
+author: mcsrobert
+branding:
+  icon: upload-cloud
+  color: blue
+
+runs:
+  using: composite
+  steps:
+    - name: Download the deploy tree
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ha-git-sync-deploy
+        path: ${{ runner.temp }}/ha-git-sync
+
+    - name: Unpack the deploy tree
+      shell: bash
+      run: mkdir "${RUNNER_TEMP}/ha-git-sync/deploy" && tar -C "${RUNNER_TEMP}/ha-git-sync/deploy" -xf "${RUNNER_TEMP}/ha-git-sync/deploy.tar"
+
+    - name: Promote to deployed
+      shell: bash
+      run: '"${GITHUB_ACTION_PATH}/promote.sh" "${RUNNER_TEMP}/ha-git-sync/deploy" "${GITHUB_SHA}"'

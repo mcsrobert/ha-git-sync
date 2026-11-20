@@ -1,0 +1,9 @@
+- id: guest_mode_off_at_night
+  alias: Turn guest mode off at night
+  triggers:
+    - trigger: time
+      at: "03:00:00"
+  actions:
+    - action: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.guest_mode
