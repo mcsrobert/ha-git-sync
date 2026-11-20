@@ -6,4 +6,17 @@
     'local>mcsrobert/ha-git-sync',
   ],
   semanticCommits: 'enabled',
+  packageRules: [
+    {
+      description: 'Release updates that ship in the image or the actions, which the preset would mark as chore',
+      matchFileNames: ['Dockerfile', 'check/action.yaml', 'promote/action.yaml'],
+      semanticCommitType: 'fix',
+    },
+    {
+      description: 'Release gitleaks updates, which the check action installs',
+      matchManagers: ['mise'],
+      matchDepNames: ['gitleaks'],
+      semanticCommitType: 'fix',
+    },
+  ],
 }

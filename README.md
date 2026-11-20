@@ -23,6 +23,9 @@ pull request ──> check ──> merge to main ──> check ──> promote �
 Git is the only way to change the configuration. Home Assistant never writes to the repository, and nothing restarts
 Home Assistant for you. When integrations change, the hook tells you to restart.
 
+Each release publishes the image and the actions under one version, `X.Y.Z` in the examples below. Use the
+[latest release](https://github.com/mcsrobert/ha-git-sync/releases/latest); its notes list the image digest.
+
 ## Configuration repository
 
 Keep the configuration the way Home Assistant expects it, with `configuration.yaml` at the root. The sidecar links
@@ -92,7 +95,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: mcsrobert/ha-git-sync/check@v0.1.0
+      - uses: mcsrobert/ha-git-sync/check@vX.Y.Z
         with:
           home-assistant-version: 2026.10.4
 
@@ -106,7 +109,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: mcsrobert/ha-git-sync/promote@v0.1.0
+      - uses: mcsrobert/ha-git-sync/promote@vX.Y.Z
 ```
 
 `check` takes two inputs:
@@ -143,7 +146,7 @@ spec:
     fsGroup: 1000 # Home Assistant's group
   initContainers:
     - name: git-sync
-      image: ghcr.io/mcsrobert/ha-git-sync:0.1.0
+      image: ghcr.io/mcsrobert/ha-git-sync:X.Y.Z
       restartPolicy: Always
       env:
         - name: GITSYNC_REPO
@@ -187,7 +190,7 @@ services:
       git-sync:
         condition: service_healthy
   git-sync:
-    image: ghcr.io/mcsrobert/ha-git-sync:0.1.0
+    image: ghcr.io/mcsrobert/ha-git-sync:X.Y.Z
     user: '0:0'
     network_mode: host
     environment:
@@ -254,5 +257,6 @@ mise run lint
 mise run check-config -- ../home-assistant-config 2026.10.4  # run the check action locally
 ```
 
-Releases come from tags: `git tag v0.1.1 && git push origin v0.1.1` builds, tests and publishes the image, then creates
-the GitHub release.
+[release-please](https://github.com/googleapis/release-please) keeps a release pull request open, built from the
+conventional commits on `main`: `feat` and `fix` create a release, and `!` marks a breaking change. Merging it tags
+`vX.Y.Z` and creates the GitHub release. The tag builds, tests and publishes the image, then adds it to the release.
