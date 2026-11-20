@@ -26,6 +26,7 @@ class HomeAssistant:
     def __init__(self):
         self.state = 'STARTING'
         self.status = 200
+        self.restart_closes = True
         self.calls = []
         ha = self
 
@@ -52,7 +53,7 @@ class HomeAssistant:
                 json.loads(body)
                 if self.path.endswith(('/reload_all', '/restart')) and ha.status != 200:
                     return self.respond(ha.status, {'message': 'The configuration is not valid'})
-                if self.path.endswith('/restart'):
+                if self.path.endswith('/restart') and ha.restart_closes:
                     self.close_connection = True
                     return
                 self.respond(200, [])
@@ -243,6 +244,7 @@ class SidecarTest(unittest.TestCase):
         self.assertTrue(failed and 'HTTP 500' in failed[0]['message'] and 'not valid' in failed[0]['message'])
         self.assertTrue(self.recorded('restart'), 'forgot the restart after it failed')
         self.ha.status = 200
+        self.ha.restart_closes = False
 
         (self.config / 'automations.yaml').write_text('- id: ui\n')
         sixth = self.deploy({'configuration.yaml': 'v6\n'}, source='f' * 40)
