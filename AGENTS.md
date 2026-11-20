@@ -26,7 +26,7 @@ The actions and the image change together, so keep them consistent in one change
   compares the two.
 
 The image is public and used by others: keep its settings few, and treat a change to a default, a path or the hook's
-behavior as a breaking change that needs a note in the release.
+behavior as a breaking change.
 
 ## Rules
 
@@ -36,4 +36,10 @@ behavior as a breaking change that needs a note in the release.
   versions by hand unless asked.
 - No explanatory comments in workflows, action files or the Dockerfile.
 - Commit messages are conventional commits with a scope, such as `fix(hook): retry when Home Assistant is down`.
-- Release by pushing a `vX.Y.Z` tag, only when asked.
+- Commit types decide releases: `feat` and `fix` create one, so use another type, such as `test`, `ci` or `docs`, for
+  changes that reach neither the image nor the actions. Mark a breaking change with `!` and a `BREAKING CHANGE:` footer
+  that tells users what to change; release-please puts it in the release notes.
+- `default.json` reaches users from `main` as soon as it merges, not through a release.
+- Releases come from merging the pull request release-please keeps open. Do not push tags by hand: the release workflow
+  adds the image to the GitHub release that release-please creates.
+- Do not edit `CHANGELOG.md` or `.release-please-manifest.json`. Release-please maintains them.
