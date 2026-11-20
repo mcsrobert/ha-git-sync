@@ -22,10 +22,34 @@ recorded() {
   cat "$state/$1" 2> /dev/null || true
 }
 
+# Print the HTTP status of a call to Home Assistant's API, or why there is none: down when nothing answers at
+# $ha_url, closed when Home Assistant closed the connection without answering, and failed for other errors.
 api() {
-  curl --silent --show-error --max-time 120 --output "$state/response" --write-out '%{http_code}' \
+  local result
+  result=$(curl --silent --show-error --max-time 120 --output "$state/response" \
+    --write-out '%{http_code} %{exitcode}' \
     --header @<(printf 'Authorization: Bearer %s\n' "$(< "$token_file")") \
-    --header 'Content-Type: application/json' "${@:2}" "$ha_url/api/$1" || true
+    --header 'Content-Type: application/json' "${@:2}" "$ha_url/api/$1") || true
+  case ${result#* } in
+    0) echo "${result% *}" ;;
+    6 | 7) echo down ;;
+    52 | 56) echo closed ;;
+    *) echo failed ;;
+  esac
+}
+
+# Exit, so git-sync retries the hook later, unless Home Assistant answered and accepted the token.
+answered() {
+  case $1 in
+    down | closed | failed)
+      echo "Home Assistant is not reachable at $ha_url ($1); retrying later" >&2
+      exit 1
+      ;;
+    401 | 403)
+      echo "Home Assistant rejected the token (HTTP $1)" >&2
+      exit 1
+      ;;
+  esac
 }
 
 json() {
@@ -161,62 +185,39 @@ record installed "$commit"
 
 if [[ $(recorded reloaded) != "$commit" ]]; then
   status=$(api config)
-  case $status in
-    200) ;;
-    000)
-      echo "Home Assistant is not reachable at $ha_url; retrying the reload later" >&2
-      exit 1
-      ;;
-    401 | 403)
-      echo "Home Assistant rejected the token (HTTP $status)" >&2
-      exit 1
-      ;;
-    *)
-      echo "Home Assistant answered HTTP $status; retrying the reload later" >&2
-      exit 1
-      ;;
-  esac
+  answered "$status"
+  if [[ $status != 200 ]]; then
+    echo "Home Assistant answered HTTP $status; retrying later" >&2
+    exit 1
+  fi
   if ! grep -q '"state": *"RUNNING"' "$state/response"; then
-    echo "Home Assistant is still starting; retrying the reload later" >&2
+    echo "Home Assistant is still starting; retrying later" >&2
     exit 1
   fi
   if [[ -s $state/restart ]]; then
     status=$(api services/homeassistant/restart --data '{}')
-    case $status in
-      # Home Assistant may stop before it answers, so no answer counts as a restart.
-      200 | 000)
-        echo "Restarting Home Assistant with ${built_from:0:7}, because integrations changed"
-        rm "$state/restart"
-        ;;
-      401 | 403)
-        echo "Home Assistant rejected the token (HTTP $status)" >&2
-        exit 1
-        ;;
-      *)
-        notify restart "Home Assistant not restarted" "Restarting with ${built_from:0:7} failed with HTTP \
+    # Home Assistant may stop before it answers.
+    if [[ $status == closed ]]; then
+      status=200
+    fi
+    answered "$status"
+    if [[ $status == 200 ]]; then
+      echo "Restarting Home Assistant with ${built_from:0:7}, because integrations changed"
+      rm "$state/restart"
+    else
+      notify restart "Home Assistant not restarted" "Restarting with ${built_from:0:7} failed with HTTP \
 $status, so Home Assistant runs the old integrations until the next deploy restarts it: \
 $(head -c 1000 "$state/response")"
-        ;;
-    esac
+    fi
   else
     status=$(api services/homeassistant/reload_all --data '{}')
-    case $status in
-      200)
-        echo "Reloaded Home Assistant with ${built_from:0:7}"
-        ;;
-      000)
-        echo "Home Assistant is not reachable at $ha_url; retrying the reload later" >&2
-        exit 1
-        ;;
-      401 | 403)
-        echo "Home Assistant rejected the token (HTTP $status)" >&2
-        exit 1
-        ;;
-      *)
-        notify reload "Configuration not reloaded" \
-          "Reloading ${built_from:0:7} failed with HTTP $status: $(head -c 1000 "$state/response")"
-        ;;
-    esac
+    answered "$status"
+    if [[ $status == 200 ]]; then
+      echo "Reloaded Home Assistant with ${built_from:0:7}"
+    else
+      notify reload "Configuration not reloaded" \
+        "Reloading ${built_from:0:7} failed with HTTP $status: $(head -c 1000 "$state/response")"
+    fi
   fi
   record reloaded "$commit"
 fi
