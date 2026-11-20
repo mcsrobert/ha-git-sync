@@ -6,7 +6,7 @@ ha-git-sync deploys a Home Assistant configuration from Git. [README.md](./READM
 
 ```text
 Dockerfile          The image: git-sync plus the files in image/, with git-sync defaults set through ENV
-image/hook          git-sync's exechook: links the checkout into /config, installs, reloads, notifies
+image/hook          git-sync's exechook: links the checkout into /config, installs, reloads or restarts, notifies
 image/ready         Startup probe and Docker health check
 check/action.yaml   Composite action: gitleaks, build the deploy tree, check_config, upload it
 promote/action.yaml Composite action: download the deploy tree and run promote.sh

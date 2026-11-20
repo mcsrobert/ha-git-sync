@@ -1,7 +1,7 @@
 #!/bin/bash
 # git-sync's exechook. git-sync runs it in the new worktree after every sync and when it starts,
 # and retries it with backoff until it succeeds. It links the checkout into /config, installs the
-# integrations and cards CI built, and reloads Home Assistant.
+# integrations and cards CI built, and reloads Home Assistant, or restarts it when integrations changed.
 set -euo pipefail
 
 config=/config
@@ -123,9 +123,6 @@ install() {
   printf '%s\n' "$want" > "$target/.git-sync.new"
   mv "$target/.git-sync.new" "$target/.git-sync"
   echo "Installed $source from ${commit:0:7}"
-  if [[ -n $have ]]; then
-    record restart "$built_from"
-  fi
 }
 
 built_from=$(git log -1 --format='%(trailers:key=Source-Commit,valueonly)' "$commit" | head -n 1)
@@ -153,8 +150,13 @@ if [[ ! -d $config/www ]]; then
 fi
 own "$config/custom_components"
 own "$config/www/community"
+integrations=$(cat "$config/custom_components/.git-sync")
 install custom_components "$config/custom_components"
 install www/community "$config/www/community"
+# Home Assistant loads integrations only when it starts, so replacing installed ones needs a restart.
+if [[ -n $integrations && $(cat "$config/custom_components/.git-sync") != "$integrations" ]]; then
+  record restart "$built_from"
+fi
 record installed "$commit"
 
 if [[ $(recorded reloaded) != "$commit" ]]; then
@@ -178,31 +180,45 @@ if [[ $(recorded reloaded) != "$commit" ]]; then
     echo "Home Assistant is still starting; retrying the reload later" >&2
     exit 1
   fi
-  status=$(api services/homeassistant/reload_all --data '{}')
-  case $status in
-    200)
-      echo "Reloaded Home Assistant with ${built_from:0:7}"
-      ;;
-    000)
-      echo "Home Assistant is not reachable at $ha_url; retrying the reload later" >&2
-      exit 1
-      ;;
-    401 | 403)
-      echo "Home Assistant rejected the token (HTTP $status)" >&2
-      exit 1
-      ;;
-    *)
-      notify reload "Configuration not reloaded" \
-        "Reloading ${built_from:0:7} failed with HTTP $status: $(head -c 1000 "$state/response")"
-      ;;
-  esac
+  if [[ -s $state/restart ]]; then
+    status=$(api services/homeassistant/restart --data '{}')
+    case $status in
+      # Home Assistant may stop before it answers, so no answer counts as a restart.
+      200 | 000)
+        echo "Restarting Home Assistant with ${built_from:0:7}, because integrations changed"
+        rm "$state/restart"
+        ;;
+      401 | 403)
+        echo "Home Assistant rejected the token (HTTP $status)" >&2
+        exit 1
+        ;;
+      *)
+        notify restart "Home Assistant not restarted" "Restarting with ${built_from:0:7} failed with HTTP \
+$status, so Home Assistant runs the old integrations until the next deploy restarts it: \
+$(head -c 1000 "$state/response")"
+        ;;
+    esac
+  else
+    status=$(api services/homeassistant/reload_all --data '{}')
+    case $status in
+      200)
+        echo "Reloaded Home Assistant with ${built_from:0:7}"
+        ;;
+      000)
+        echo "Home Assistant is not reachable at $ha_url; retrying the reload later" >&2
+        exit 1
+        ;;
+      401 | 403)
+        echo "Home Assistant rejected the token (HTTP $status)" >&2
+        exit 1
+        ;;
+      *)
+        notify reload "Configuration not reloaded" \
+          "Reloading ${built_from:0:7} failed with HTTP $status: $(head -c 1000 "$state/response")"
+        ;;
+    esac
+  fi
   record reloaded "$commit"
-fi
-
-if [[ -s $state/restart ]]; then
-  notify restart "Restart Home Assistant" "Integrations or cards changed in $(cut -c 1-7 "$state/restart"). \
-Home Assistant runs the old code until it restarts."
-  rm -f "$state/restart"
 fi
 
 orphans=()
