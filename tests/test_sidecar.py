@@ -25,7 +25,7 @@ class HomeAssistant:
 
     def __init__(self):
         self.state = 'STARTING'
-        self.reload_status = 200
+        self.status = 200
         self.calls = []
         ha = self
 
@@ -50,9 +50,11 @@ class HomeAssistant:
                 if self.headers.get('Authorization') != f'Bearer {TOKEN}':
                     return self.respond(401, {'message': 'unauthorized'})
                 json.loads(body)
-                if self.path.endswith('/reload_all') and ha.reload_status != 200:
-                    return self.respond(ha.reload_status, {'message': 'Cannot quick reload all YAML configurations '
-                                                           'because the configuration is not valid'})
+                if self.path.endswith(('/reload_all', '/restart')) and ha.status != 200:
+                    return self.respond(ha.status, {'message': 'The configuration is not valid'})
+                if self.path.endswith('/restart'):
+                    self.close_connection = True
+                    return
                 self.respond(200, [])
 
             def log_message(self, *args):
@@ -207,36 +209,47 @@ class SidecarTest(unittest.TestCase):
 
         second = self.deploy({'configuration.yaml': 'v2\n', 'custom_components/retry/manifest.json': 'retry v2'},
                              source='b' * 40, remove=['custom_components/retry/sub', 'pyscript'])
-        wait(lambda: self.recorded('reloaded') == second, 'reload of the second deploy')
-        wait(lambda: self.ha.notifications('restart'), 'restart notification')
-        self.assertIn('bbbbbbb', self.ha.notifications('restart')[0]['message'])
+        wait(lambda: self.recorded('reloaded') == second, 'restart for the second deploy')
+        self.assertEqual(len(self.ha.posts('/homeassistant/restart')), 1)
+        self.assertEqual(len(self.ha.posts('/reload_all')), 1, 'reloaded instead of restarting')
+        self.assertIsNone(self.recorded('restart'))
         self.assertEqual((self.config / 'custom_components' / 'retry' / 'manifest.json').read_text(), 'retry v2')
         self.assertFalse((self.config / 'custom_components' / 'retry' / 'sub').exists())
         self.assertEqual(list((self.config / 'custom_components').glob('.retry.*')), [])
         self.assertNotIn('pyscript', self.links(), 'kept the link to a removed folder')
 
-        notes = len(self.ha.notifications())
-        third = self.deploy({'configuration.yaml': 'v3\n'}, source='c' * 40)
-        wait(lambda: self.recorded('reloaded') == third, 'reload of a configuration-only deploy')
-        time.sleep(1)
-        self.assertEqual(len(self.ha.notifications()), notes, 'a configuration-only deploy notified')
+        third = self.deploy({'configuration.yaml': 'v3\n', 'www/community/card/card.js': 'card v2'}, source='c' * 40)
+        wait(lambda: self.recorded('reloaded') == third, 'reload of a deploy that changes a card')
+        self.assertEqual((self.config / 'www' / 'community' / 'card' / 'card.js').read_text(), 'card v2')
+        self.assertEqual(len(self.ha.posts('/reload_all')), 2)
+        self.assertEqual(len(self.ha.posts('/homeassistant/restart')), 1, 'restarted for a card')
+        self.assertEqual(self.ha.notifications(), [], 'notified about a deploy that worked')
 
         stray = self.deploy({'configuration.yaml': 'stray\n'})
         wait(lambda: self.recorded('reloaded') == stray, 'stray commit handled')
         self.assertTrue(self.ha.notifications('deploy'))
-        self.assertEqual(len(self.ha.posts('/reload_all')), 3, 'reloaded a commit CI did not build')
+        self.assertEqual(len(self.ha.posts('/reload_all')), 2, 'reloaded a commit CI did not build')
         self.assertTrue(self.ready(name), 'a stray commit kept Home Assistant from starting')
 
-        self.ha.reload_status = 500
+        self.ha.status = 500
         fourth = self.deploy({'configuration.yaml': 'v4\n'}, source='d' * 40)
         wait(lambda: self.recorded('reloaded') == fourth, 'failed reload recorded')
         failed = self.ha.notifications('reload')
         self.assertTrue(failed and 'HTTP 500' in failed[0]['message'] and 'not valid' in failed[0]['message'])
-        self.ha.reload_status = 200
+
+        fifth = self.deploy({'configuration.yaml': 'v5\n'}, source='e' * 40, remove=['custom_components/nordpool'])
+        wait(lambda: self.recorded('reloaded') == fifth, 'failed restart recorded')
+        failed = self.ha.notifications('restart')
+        self.assertTrue(failed and 'HTTP 500' in failed[0]['message'] and 'not valid' in failed[0]['message'])
+        self.assertTrue(self.recorded('restart'), 'forgot the restart after it failed')
+        self.ha.status = 200
 
         (self.config / 'automations.yaml').write_text('- id: ui\n')
-        fifth = self.deploy({'configuration.yaml': 'v5\n'}, source='e' * 40, remove=['custom_components/nordpool'])
-        wait(lambda: self.recorded('reloaded') == fifth, 'reload of the fifth deploy')
+        sixth = self.deploy({'configuration.yaml': 'v6\n'}, source='f' * 40)
+        wait(lambda: self.recorded('reloaded') == sixth, 'restart left over from the fifth deploy')
+        self.assertEqual(len(self.ha.posts('/homeassistant/restart')), 3)
+        self.assertEqual(len(self.ha.posts('/reload_all')), 3)
+        self.assertIsNone(self.recorded('restart'))
         wait(lambda: self.ha.notifications('editor'), 'editor notification')
         self.assertIn('automations.yaml', self.ha.notifications('editor')[0]['message'])
         self.assertFalse((self.config / 'custom_components' / 'nordpool').exists())

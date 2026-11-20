@@ -1,18 +1,20 @@
 # ha-git-sync
 
-Deploy a Home Assistant configuration from a Git repository. Home Assistant reloads each change without a restart.
+Deploy a Home Assistant configuration from a Git repository. Home Assistant reloads each change, and restarts only
+when custom integrations change.
 
 ```text
 pull request ─> check
-main ─────────> check ─> promote ─> deployed ─> sidecar ─> /config ─> reload_all
+main ─────────> check ─> promote ─> deployed ─> sidecar ─> /config ─> reload_all or restart
 ```
 
 - **`check`**, a GitHub Action, scans for leaked secrets, downloads the custom integrations and cards pinned in
   `hacs.yaml`, and runs Home Assistant's `check_config` on the result.
 - **`promote`**, a GitHub Action, commits the tree `check` built on `main` to the `deployed` branch.
 - **The sidecar** runs next to Home Assistant. It is [git-sync](https://github.com/kubernetes/git-sync) following
-  `deployed`, plus a hook that puts the checkout in `/config` and calls `homeassistant.reload_all`. It never restarts
-  Home Assistant; when integrations or cards change, it asks you to.
+  `deployed`, plus a hook that puts the checkout in `/config` and calls `homeassistant.reload_all`. When custom
+  integrations change, it calls `homeassistant.restart` instead, because Home Assistant loads them only at startup.
+  Both check the configuration first and leave Home Assistant running as it was if it is not valid.
 
 ## What gets written where
 
@@ -29,8 +31,9 @@ The rest of `/config` stays Home Assistant's: `secrets.yaml`, `.storage/`, the d
 The UI editors still save `automations.yaml`, `scripts.yaml` and `scenes.yaml` there, but your configuration does not
 load them. The hook raises a notification when one appears, so you can move the change into Git and delete the file.
 
-The hook also raises a notification when a reload fails, and when `deployed` points at a commit `promote` did not make.
-It does not install or reload such a commit, and the next run on `main` restores `deployed`.
+The hook also raises a notification when a reload or restart fails, and when `deployed` points at a commit `promote`
+did not make. It does not install or reload such a commit, and the next run on `main` restores `deployed`. A restart
+that fails stays due, so the next deploy restarts instead of reloading.
 
 ## Your repository
 
@@ -61,7 +64,7 @@ cards:
     path: dist/weather-chart-card.js
 ```
 
-Load cards from `/local/community/<repository>/<file>`.
+Load cards from `/local/community/<repository>/<file>`. A changed card needs a browser refresh, not a restart.
 
 ## Setup
 
@@ -131,7 +134,7 @@ The sidecar mounts Home Assistant's `/config` volume and reads two files from `/
 
 - `ssh`: a read-only deploy key for the repository. For HTTPS, use git-sync's `GITSYNC_USERNAME` and
   `GITSYNC_PASSWORD_FILE` instead.
-- `ha-token`: a long-lived access token of an administrator, which `reload_all` requires.
+- `ha-token`: a long-lived access token of an administrator, which `reload_all` and `restart` require.
 
 On Kubernetes, add it to the Home Assistant pod as a native sidecar, with a Secret at `/etc/git-secret` and an
 `emptyDir` at `/tmp`. Its startup probe holds Home Assistant back until the first deploy is in place. The image runs as
