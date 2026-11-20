@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -21,13 +22,15 @@ TOKEN = 'secret-token'
 
 
 class HomeAssistant:
-    """Answers the API calls the hook makes and records them."""
+    """Answers the API calls the hook makes and records them. Until start(), nothing listens on its port, as when
+    Home Assistant is down."""
 
     def __init__(self):
         self.state = 'STARTING'
         self.status = 200
         self.restart_closes = True
         self.calls = []
+        self.httpd = None
         ha = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -61,22 +64,30 @@ class HomeAssistant:
             def log_message(self, *args):
                 pass
 
+        self.handler = Handler
         # Docker Desktop forwards host.docker.internal to the host's loopback; on Linux it is the bridge gateway.
-        address = '127.0.0.1' if sys.platform == 'darwin' else '0.0.0.0'
-        self.httpd = http.server.ThreadingHTTPServer((address, 0), Handler)
-        self.url = f'http://host.docker.internal:{self.httpd.server_port}'
+        self.address = '127.0.0.1' if sys.platform == 'darwin' else '0.0.0.0'
+        with socket.socket() as probe:
+            probe.bind((self.address, 0))
+            self.port = probe.getsockname()[1]
+        self.url = f'http://host.docker.internal:{self.port}'
+
+    def start(self):
+        self.httpd = http.server.ThreadingHTTPServer((self.address, self.port), self.handler)
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
-    def posts(self, suffix):
+    def stop(self):
+        if self.httpd:
+            self.httpd.shutdown()
+            self.httpd.server_close()
+            self.httpd = None
+
+    def posts(self, suffix=''):
         return [call for call in self.calls if call[0] == 'POST' and call[1].endswith(suffix)]
 
     def notifications(self, name=None):
         notes = [json.loads(call[3]) for call in self.posts('/persistent_notification/create')]
         return [note for note in notes if name is None or note['notification_id'] == f'git_sync_{name}']
-
-    def close(self):
-        self.httpd.shutdown()
-        self.httpd.server_close()
 
 
 def wait(condition, what, timeout=60):
@@ -109,7 +120,7 @@ class SidecarTest(unittest.TestCase):
         git(self.tmp, 'init', '-q', '--bare', '-b', 'main', str(self.remote))
         git(self.tmp, 'clone', '-q', str(self.remote), str(self.work))
         self.ha = HomeAssistant()
-        self.addCleanup(self.ha.close)
+        self.addCleanup(self.ha.stop)
         self.mounts = ['--user', f'{os.getuid()}:{os.getgid()}', '--add-host', 'host.docker.internal:host-gateway',
                        '-v', f'{self.config}:/config', '-v', f'{self.remote}:/remote.git:ro',
                        '-v', f'{secret}:/etc/git-secret:ro', '-e', f'HA_URL={self.ha.url}']
@@ -195,16 +206,20 @@ class SidecarTest(unittest.TestCase):
         self.assertEqual((self.config / 'custom_components' / 'retry' / 'sub' / 'x.py').read_text(), '1')
         self.assertFalse((self.config / 'custom_components' / 'retry').is_symlink())
         self.assertEqual((self.config / 'www' / 'community' / 'card' / 'card.js').read_text(), 'card v1')
-        self.assertEqual(self.ha.posts('/reload_all'), [], 'reloaded while Home Assistant starts')
+        self.assertIsNone(self.recorded('restart'), 'restarts a Home Assistant that was down during the install')
 
         mirror = self.tmp / 'mirror'
         layout((self.config / '.git-sync' / 'current').resolve(), mirror)
         self.assertEqual({path.name: str(path.readlink()) for path in mirror.iterdir() if path.is_symlink()},
                          self.links(), 'check_config sees a different layout than the sidecar makes')
 
+        self.ha.start()
+        wait(lambda: self.ha.calls, 'a call once Home Assistant answers')
+        self.assertEqual(self.ha.posts('/reload_all'), [], 'reloaded while Home Assistant starts')
         self.ha.state = 'RUNNING'
         wait(lambda: self.recorded('reloaded') == first, 'reload once Home Assistant runs')
         self.assertEqual(len(self.ha.posts('/reload_all')), 1)
+        self.assertEqual(self.ha.posts('/restart'), [], 'restarted after the first install')
         self.assertTrue(all(call[2] == f'Bearer {TOKEN}' for call in self.ha.calls))
         self.assertEqual(self.ha.notifications(), [], 'notified after the first install')
 
@@ -261,18 +276,61 @@ class SidecarTest(unittest.TestCase):
         status = docker('inspect', '--format', '{{.State.Health.Status}}', name).stdout.strip()
         self.assertEqual(status, 'healthy')
 
+    def test_restarts_only_when_home_assistant_runs_replaced_integrations(self):
+        self.ha.start()
+        self.ha.state = 'RUNNING'
+        plain = self.deploy({'configuration.yaml': 'v1\n'}, source='a' * 40)
+        self.assertEqual(self.hook(plain).returncode, 0)
+        self.assertEqual(len(self.ha.posts('/reload_all')), 1)
+
+        first = self.deploy({'custom_components/retry/manifest.json': 'v1'}, source='b' * 40)
+        self.assertEqual(self.hook(first).returncode, 0)
+        self.assertEqual(len(self.ha.posts('/restart')), 1, 'adding the first integration did not restart')
+
+        self.ha.stop()
+        down = self.deploy({'custom_components/retry/manifest.json': 'v2'}, source='c' * 40)
+        self.assertIn('not reachable', self.hook(down).stderr)
+        self.assertEqual(self.recorded('installed'), down)
+        self.assertIsNone(self.recorded('restart'), 'restarts a Home Assistant that was down during the install')
+        self.ha.start()
+        self.assertEqual(self.hook(down).returncode, 0)
+        self.assertEqual(len(self.ha.posts('/reload_all')), 2)
+        self.assertEqual(len(self.ha.posts('/restart')), 1)
+
+        self.ha.status = 500
+        refused = self.deploy({'custom_components/retry/manifest.json': 'v3'}, source='d' * 40)
+        self.assertEqual(self.hook(refused).returncode, 0)
+        self.assertTrue(self.recorded('restart'), 'forgot a refused restart')
+        self.ha.stop()
+        self.assertEqual(self.hook(refused).returncode, 0)
+        self.assertIsNone(self.recorded('restart'), 'kept a restart while Home Assistant was down')
+        self.ha.start()
+        self.ha.status = 200
+
+        community = self.config / 'www' / 'community'
+        halfway = self.deploy({'custom_components/retry/manifest.json': 'v4', 'www/community/card/card.js': 'js'},
+                              source='e' * 40)
+        community.chmod(0o555)
+        self.addCleanup(community.chmod, 0o755)
+        self.assertNotEqual(self.hook(halfway).returncode, 0)
+        self.assertEqual((self.config / 'custom_components' / 'retry' / 'manifest.json').read_text(), 'v4')
+        community.chmod(0o755)
+        self.assertEqual(self.hook(halfway).returncode, 0)
+        self.assertEqual(len(self.ha.posts('/restart')), 3, 'lost the restart when the hook failed halfway')
+
     def test_restarts_quietly_and_retries_failed_hooks(self):
+        self.ha.start()
         first = self.deploy({'configuration.yaml': 'v1\n'}, source='a' * 40)
         self.ha.state = 'RUNNING'
         name = self.start()
         wait(lambda: self.recorded('reloaded') == first, 'first reload')
         self.stop(name)
 
-        calls = len(self.ha.calls)
+        posts = len(self.ha.posts())
         name = self.start()
         wait(lambda: self.ready(name), 'ready after a restart', timeout=15)
         time.sleep(3)
-        self.assertEqual(len(self.ha.calls), calls, 'a restart called Home Assistant')
+        self.assertEqual(len(self.ha.posts()), posts, 'a restart of the sidecar reloaded or notified')
         self.stop(name)
 
         second = self.deploy({'configuration.yaml': 'v2\n'}, source='b' * 40)
@@ -283,7 +341,7 @@ class SidecarTest(unittest.TestCase):
         result = self.hook(second)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('still starting', result.stderr)
-        self.ha.close()
+        self.ha.stop()
         result = self.hook(second)
         self.assertNotEqual(result.returncode, 0, 'succeeded without Home Assistant')
         self.assertIn('not reachable', result.stderr)

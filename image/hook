@@ -120,10 +120,15 @@ own() {
   : > "$1/.git-sync"
 }
 
+# The hash of the tree $1 in this commit, or nothing when the commit does not have it.
+tree() {
+  git rev-parse --verify --quiet "$commit:$1" || true
+}
+
 # Replace everything in $2 with the folders of $1 in this commit, unless its marker shows they are installed.
 install() {
   local source=$1 target=$2 want have entry name
-  want=$(git rev-parse --verify --quiet "$commit:$source" || true)
+  want=$(tree "$source")
   have=$(cat "$target/.git-sync")
   if [[ $want == "$have" ]]; then
     return
@@ -174,20 +179,22 @@ if [[ ! -d $config/www ]]; then
 fi
 own "$config/custom_components"
 own "$config/www/community"
-integrations=$(cat "$config/custom_components/.git-sync")
-install custom_components "$config/custom_components"
-install www/community "$config/www/community"
-# Home Assistant loads integrations only when it starts, so replacing installed ones needs a restart.
-if [[ -n $integrations && $(cat "$config/custom_components/.git-sync") != "$integrations" ]]; then
+ha=$(api config)
+# Home Assistant loads integrations only when it starts. Replacing them while it runs needs a restart, and when it is
+# down, it loads the installed ones once it starts.
+if [[ $ha == down ]]; then
+  rm -f "$state/restart"
+elif [[ $(tree custom_components) != "$(cat "$config/custom_components/.git-sync")" ]]; then
   record restart "$built_from"
 fi
+install custom_components "$config/custom_components"
+install www/community "$config/www/community"
 record installed "$commit"
 
 if [[ $(recorded reloaded) != "$commit" ]]; then
-  status=$(api config)
-  answered "$status"
-  if [[ $status != 200 ]]; then
-    echo "Home Assistant answered HTTP $status; retrying later" >&2
+  answered "$ha"
+  if [[ $ha != 200 ]]; then
+    echo "Home Assistant answered HTTP $ha; retrying later" >&2
     exit 1
   fi
   if ! grep -q '"state": *"RUNNING"' "$state/response"; then
