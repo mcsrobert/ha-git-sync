@@ -67,11 +67,16 @@ json() {
 # Home Assistant's last answer, cut to 1000 bytes without ending in part of a character.
 excerpt() {
   local text
-  text=$(head -c 1000 "$state/response")
   if (($(wc -c < "$state/response") > 1000)); then
-    while [[ $text == *[$'\x80'-$'\xff'] ]]; do
+    # Keep the lookahead byte even when it is a newline, then remove the character containing it.
+    text=$(head -c 1001 "$state/response"; printf .)
+    text=${text%.}
+    while [[ $text == *[$'\x80'-$'\xbf'] ]]; do
       text=${text%?}
     done
+    text=${text%?}
+  else
+    text=$(cat "$state/response")
   fi
   printf '%s' "$text"
 }

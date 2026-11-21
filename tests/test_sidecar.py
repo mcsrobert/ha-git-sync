@@ -347,11 +347,12 @@ class SidecarTest(unittest.TestCase):
         self.assertIn('HTTP 502', self.ha.notifications('restart')[0]['message'])
 
         self.ha.status = 500
-        self.ha.message = 'x' * 5 + 'K\u00fcche ' * 400
+        self.ha.message = '錯誤' * 400
         cut = self.deploy({'configuration.yaml': 'v2\n'}, source='c' * 40)
         self.assertEqual(self.hook(cut).returncode, 0)
         self.assertEqual(len(self.ha.notifications('restart')), 2, 'a notification cut in a character was rejected')
-        self.assertIn('K\u00fcche K', self.ha.notifications('restart')[1]['message'])
+        expected = json.dumps({'message': self.ha.message}, ensure_ascii=False).encode()[:1000]
+        self.assertTrue(self.ha.notifications('restart')[1]['message'].endswith(expected.decode(errors='ignore')))
 
     def test_restarts_quietly_and_retries_failed_hooks(self):
         self.ha.start()
