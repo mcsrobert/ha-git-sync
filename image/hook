@@ -20,6 +20,7 @@ die() {
   exit 1
 }
 
+# Write lines to $1 via a same-directory temp file; strip a leading dot so .[!.]* still matches it.
 write_atomic() {
   local path=$1 name=${1##*/} tmp
   tmp=${path%/*}/.${name#.}.tmp
