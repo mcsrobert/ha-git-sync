@@ -124,7 +124,7 @@ cards:
         shutil.rmtree(self.output)
         self.write('hacs.yaml', 'cards:\n  - repository: o/card\n    version: v1\n'
                    f'    sha256: {"0" * 64}\n    asset: card.js\n')
-        self.assertFails('does not match its pinned sha256')
+        self.assertFails('not its pinned sha256')
 
     def test_normalizes_permissions(self):
         self.write('pyscript/run.py', '')

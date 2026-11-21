@@ -33,15 +33,19 @@ class GitHub:
         if not assets:
             raise Error(f'{repository} {tag} has no release asset {name}')
         digest = assets[0].get('digest') or ''
-        if not digest.startswith('sha256:') and sha256 is None:
+        expected = {}
+        if digest.startswith('sha256:'):
+            expected['published digest'] = digest.removeprefix('sha256:')
+        if sha256 is not None:
+            expected['pinned sha256'] = sha256
+        if not expected:
             raise Error(f'GitHub publishes no SHA-256 digest for {repository} {tag} {name}; '
                         'pin its sha256 or a commit instead')
         data = get(assets[0]['browser_download_url'], {})
         actual = hashlib.sha256(data).hexdigest()
-        if digest.startswith('sha256:') and actual != digest.removeprefix('sha256:'):
-            raise Error(f'{repository} {tag} {name} does not match its published digest')
-        if sha256 is not None and actual != sha256:
-            raise Error(f'{repository} {tag} {name} does not match its pinned sha256 {sha256}')
+        for label, value in expected.items():
+            if actual != value:
+                raise Error(f'{repository} {tag} {name} has sha256 {actual}, not its {label} {value}')
         return data
 
     @contextmanager
