@@ -23,7 +23,7 @@ main ─────────> check ─> promote ─> deployed ─> sidecar 
 | --- | --- | --- |
 | `main` | you | Your configuration and `hacs.yaml`. No `secrets.yaml`, and no downloaded integrations or cards. |
 | `deployed` | `promote` | `main` without `.github/`, plus `custom_components/<domain>/` and `www/community/<repository>/` from `hacs.yaml`. Each commit names its `main` commit in a `Source-Commit:` trailer. |
-| `/config/.git-sync/` | sidecar | git-sync's clone, `current` (a link to the checked-out commit) and the hook's state. |
+| `/config/.git-sync/` | sidecar | git-sync's clone and `incoming` checkout, plus the hook's state and `current` link to the last accepted tree. |
 | `/config/<name>` | sidecar | A link to `.git-sync/current/<name>` for each top-level file and folder in `deployed`, except hidden ones, `custom_components` and `www`. |
 | `/config/custom_components/`<br>`/config/www/community/` | sidecar | Copies from `deployed`, replaced whenever they change. |
 | `/config/<name>.pre-git` | sidecar | Anything the sidecar replaced: a file or folder where a link goes, a `custom_components/` or `www/community/` it did not create, such as HACS's, and on the first deploy `automations.yaml`, `scripts.yaml` and `scenes.yaml`. |
@@ -190,6 +190,8 @@ services:
 `/etc/git-secret/ha-token`) tell the hook where Home Assistant and its token are. Other
 [git-sync settings](https://github.com/kubernetes/git-sync#parameters) work too, such as `GITSYNC_PERIOD` (default
 `1m`), but keep the image's `GITSYNC_ROOT`, `GITSYNC_LINK`, `GITSYNC_REF` and `GITSYNC_EXECHOOK_COMMAND`. The image
+uses `/config/.git-sync/incoming` as its git-sync link. When upgrading, remove any explicit override that points
+`GITSYNC_LINK` at `current`, which the hook now publishes after installation. The image
 trusts GitHub's SSH host keys; for another Git host, mount its keys and set `GITSYNC_SSH_KNOWN_HOSTS_FILE`.
 
 ## Moving from HACS and the UI editors

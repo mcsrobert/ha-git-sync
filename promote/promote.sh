@@ -39,18 +39,13 @@ else
   git_dir=$(git rev-parse --absolute-git-dir)
   GIT_INDEX_FILE=$index/index git -C "$deploy" --git-dir="$git_dir" --work-tree=. add --all --force .
   tree=$(GIT_INDEX_FILE=$index/index git --git-dir="$git_dir" write-tree)
-  if [[ -n $base && $tree == "$(git rev-parse "$base^{tree}")" ]]; then
-    echo "$source_commit deploys the same files as $branch"
-    target=$base
-  else
-    parents=()
-    [[ -n $base ]] && parents=(-p "$base")
-    target=$(git -c user.name='github-actions[bot]' \
-      -c user.email='41898299+github-actions[bot]@users.noreply.github.com' \
-      commit-tree "$tree" "${parents[@]}" \
-      -m "Deploy ${source_commit:0:7}: $(git log -1 --format=%s "$source_commit")" \
-      -m "Source-Commit: $source_commit")
-  fi
+  parents=()
+  [[ -n $base ]] && parents=(-p "$base")
+  target=$(git -c user.name='github-actions[bot]' \
+    -c user.email='41898299+github-actions[bot]@users.noreply.github.com' \
+    commit-tree "$tree" "${parents[@]}" \
+    -m "Deploy ${source_commit:0:7}: $(git log -1 --format=%s "$source_commit")" \
+    -m "Source-Commit: $source_commit")
 fi
 
 if [[ $target == "$tip" ]]; then

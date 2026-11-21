@@ -5,7 +5,7 @@ COPY --chmod=0555 image/hook image/ready /ha-git-sync/
 COPY --chmod=0444 image/github_known_hosts /ha-git-sync/
 
 ENV GITSYNC_ROOT=/config/.git-sync/repo \
-    GITSYNC_LINK=/config/.git-sync/current \
+    GITSYNC_LINK=/config/.git-sync/incoming \
     GITSYNC_REF=deployed \
     GITSYNC_PERIOD=1m \
     GITSYNC_DEPTH=1 \

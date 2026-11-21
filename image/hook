@@ -12,7 +12,7 @@ ha_url=${HA_URL:-http://localhost:8123}
 token_file=${HA_TOKEN_FILE:-/etc/git-secret/ha-token}
 commit=${GITSYNC_HASH:?}
 
-mkdir -p "$state/notifications"
+mkdir -p "$state/notifications" "$state/trees"
 
 record() {
   printf '%s\n' "$2" > "$state/.$1"
@@ -154,6 +154,12 @@ own() {
     return
   fi
   if [[ -e $1 || -L $1 ]]; then
+    if [[ $1 == "$config/custom_components" ]]; then
+      local component
+      for component in "$1"/*/; do
+        [[ -d $component ]] && record restart "$built_from" && break
+      done
+    fi
     aside "$1"
   fi
   mkdir "$1"
@@ -173,6 +179,12 @@ install() {
   if [[ $want == "$have" ]]; then
     return
   fi
+  if [[ $source == custom_components ]]; then
+    record restart "$built_from"
+    rm -f "$state/reloaded"
+  fi
+  printf 'installing\n' > "$target/.git-sync.new"
+  mv "$target/.git-sync.new" "$target/.git-sync"
   for entry in "$target"/* "$target"/.[!.]*; do
     name=${entry##*/}
     if [[ -e $entry && $name != .git-sync && ($name == .* || ! -d $source/$name) ]]; then
@@ -197,38 +209,54 @@ install() {
 built_from=$(git log -1 --format='%(trailers:key=Source-Commit,valueonly)' "$commit" | head -n 1)
 if [[ -z $built_from ]]; then
   echo "${commit:0:7} has no Source-Commit trailer, so CI did not build it; not installing or reloading"
-  record installed "$commit"
-  if [[ $(recorded reloaded) != "$commit" ]]; then
+  if [[ $(recorded rejected) != "$commit" ]]; then
     notify deploy "Configuration not deployed" "The deployed branch is at ${commit:0:7}, which CI did not \
 build, so nothing was installed or reloaded. The next CI run on the main branch restores it."
-    record reloaded "$commit"
+    record rejected "$commit"
   fi
   send_notifications
   exit 0
 fi
 
-if [[ -z $(recorded installed) ]]; then
+if [[ $(readlink "$config/configuration.yaml" || true) != "$current/configuration.yaml" ]]; then
   for name in automations.yaml scripts.yaml scenes.yaml; do
     if [[ -f $config/$name && ! -L $config/$name ]]; then
       aside "$config/$name"
     fi
   done
 fi
-link
+if [[ $(recorded installed) != "$commit" ]]; then
+  rm -f "$state/installed"
+fi
+rm -f "$state/rejected"
 if [[ ! -d $config/www ]]; then
   mkdir -m 2775 "$config/www"
 fi
 own "$config/custom_components"
 own "$config/www/community"
-# An unreachable API can belong to a running instance that still has the previous integrations loaded.
-if [[ $(tree custom_components) != "$(cat "$config/custom_components/.git-sync")" ]]; then
-  record restart "$built_from"
-fi
 install custom_components "$config/custom_components"
 install www/community "$config/www/community"
-record installed "$commit"
 
-if [[ $(recorded reloaded) != "$commit" ]]; then
+content=$(git rev-parse "$commit^{tree}")
+snapshot=$state/trees/$content
+if [[ ! -d $snapshot ]]; then
+  rm -rf "$state/staging"
+  mkdir "$state/staging"
+  (
+    GLOBIGNORE=.git
+    cp -a --reflink=auto -- * "$state/staging/"
+  )
+  mv "$state/staging" "$snapshot"
+fi
+link
+ln -sfnT "state/trees/$content" "$state/.current"
+mv -Tf "$state/.current" "$config/$current"
+record installed "$commit"
+for old in "$state/trees"/*; do
+  [[ $old == "$snapshot" ]] || rm -rf "$old"
+done
+
+if [[ $(recorded reloaded) != "$commit" && (-s $state/restart || $(recorded applied) != "$content") ]]; then
   ha=$(api config)
   answered "$ha"
   if [[ $ha != 200 ]]; then
@@ -239,6 +267,7 @@ if [[ $(recorded reloaded) != "$commit" ]]; then
     echo "Home Assistant is still starting; retrying later" >&2
     exit 1
   fi
+  rm -f "$state/applied"
   if [[ -s $state/restart ]]; then
     status=$(api services/homeassistant/restart --data '{}')
     # Home Assistant may stop before it answers.
@@ -265,8 +294,11 @@ changed, restart Home Assistant yourself."$'\n\n'"$(excerpt)"
         "Reloading ${built_from:0:7} failed with HTTP $status: $(excerpt)"
     fi
   fi
-  record reloaded "$commit"
+  if [[ $status == 200 ]]; then
+    record applied "$content"
+  fi
 fi
+record reloaded "$commit"
 
 orphans=()
 for name in automations.yaml scripts.yaml scenes.yaml; do

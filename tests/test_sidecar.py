@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
@@ -35,7 +34,7 @@ class HomeAssistant:
         self.notification_status = 200
         self.calls = []
         self.notes = []
-        self.httpd = None
+        self.running = False
         ha = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -85,22 +84,30 @@ class HomeAssistant:
                 pass
 
         self.handler = Handler
+        self.reserve_port()
+
+    def reserve_port(self):
         # Docker Desktop forwards host.docker.internal to the host's loopback; on Linux it is the bridge gateway.
-        self.address = '127.0.0.1' if sys.platform == 'darwin' else '0.0.0.0'
-        with socket.socket() as probe:
-            probe.bind((self.address, 0))
-            self.port = probe.getsockname()[1]
+        address = '127.0.0.1' if sys.platform == 'darwin' else '0.0.0.0'
+        self.httpd = http.server.ThreadingHTTPServer((address, 0), self.handler, bind_and_activate=False)
+        self.httpd.server_bind()
+        self.port = self.httpd.server_port
         self.url = f'http://host.docker.internal:{self.port}'
 
     def start(self):
-        self.httpd = http.server.ThreadingHTTPServer((self.address, self.port), self.handler)
+        self.httpd.server_activate()
+        self.running = True
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
     def stop(self):
-        if self.httpd:
+        self.close()
+        self.reserve_port()
+
+    def close(self):
+        if self.running:
             self.httpd.shutdown()
-            self.httpd.server_close()
-            self.httpd = None
+            self.running = False
+        self.httpd.server_close()
 
     def posts(self, suffix=''):
         return [call for call in self.calls if call[0] == 'POST' and call[1].endswith(suffix)]
@@ -139,14 +146,15 @@ class SidecarTest(unittest.TestCase):
         git(self.tmp, 'init', '-q', '--bare', '-b', 'main', str(self.remote))
         git(self.tmp, 'clone', '-q', str(self.remote), str(self.work))
         self.ha = HomeAssistant()
-        self.addCleanup(self.ha.stop)
+        self.addCleanup(self.ha.close)
         self.mounts = ['--user', f'{os.getuid()}:{os.getgid()}', '--add-host', 'host.docker.internal:host-gateway',
                        '-v', f'{self.config}:/config', '-v', f'{self.remote}:/remote.git:ro',
-                       '-v', f'{secret}:/etc/git-secret:ro', '-e', f'HA_URL={self.ha.url}']
+                       '-v', f'{secret}:/etc/git-secret:ro']
 
     def start(self):
         name = f'ha-git-sync-test-{uuid.uuid4().hex[:8]}'
         docker('run', '-d', '--name', name, *self.mounts, '-e', 'GITSYNC_REPO=file:///remote.git',
+               '-e', f'HA_URL={self.ha.url}',
                '-e', 'GITSYNC_PERIOD=1s', '-e', 'GITSYNC_EXECHOOK_BACKOFF=1s',
                '-e', 'GITSYNC_STALE_WORKTREE_TIMEOUT=5s', IMAGE)
         self.addCleanup(self.stop, name)
@@ -163,7 +171,8 @@ class SidecarTest(unittest.TestCase):
 
     def hook(self, commit, token='ha-token'):
         """Run the hook once in a clone of the deployed branch, as git-sync would after a sync."""
-        return docker('run', '--rm', *self.mounts, '-v', f'{self.work}:/work:ro', '-w', '/work',
+        return docker('run', '--rm', '--cap-drop=DAC_OVERRIDE', *self.mounts, '-v', f'{self.work}:/work:ro', '-w', '/work',
+                      '-e', f'HA_URL={self.ha.url}',
                       '-e', f'GITSYNC_HASH={commit}', '-e', f'HA_TOKEN_FILE=/etc/git-secret/{token}',
                       '--entrypoint', '/ha-git-sync/hook', IMAGE, check=False)
 
@@ -262,7 +271,9 @@ class SidecarTest(unittest.TestCase):
 
         stray = self.deploy({'configuration.yaml': 'stray\n'})
         wait(lambda: self.ha.notifications(), 'stray commit notification')
-        self.assertEqual(self.recorded('reloaded'), stray)
+        self.assertEqual(self.recorded('rejected'), stray)
+        self.assertEqual(self.recorded('installed'), third)
+        self.assertEqual((self.config / 'configuration.yaml').read_text(), 'v3\n')
         self.assertTrue(self.ha.notifications('deploy'))
         self.assertEqual(len(self.ha.posts('/reload_all')), 1, 'reloaded a commit CI did not build')
         self.assertTrue(self.ready(name), 'a stray commit kept Home Assistant from starting')
@@ -297,6 +308,47 @@ class SidecarTest(unittest.TestCase):
 
         status = docker('inspect', '--format', '{{.State.Health.Status}}', name).stdout.strip()
         self.assertEqual(status, 'healthy')
+
+    def test_first_valid_deploy_migrates_after_a_rejected_tip(self):
+        self.hacs_era_config()
+        self.ha.start()
+        self.ha.state = 'RUNNING'
+        stray = self.deploy({'configuration.yaml': 'stray\n'})
+        self.assertEqual(self.hook(stray).returncode, 0)
+        self.assertIsNone(self.recorded('installed'))
+        self.assertEqual((self.config / 'configuration.yaml').read_text(), 'old\n')
+
+        first = self.deploy({'configuration.yaml': 'valid\n'}, source='a' * 40)
+        self.assertEqual(self.hook(first).returncode, 0)
+        self.assertTrue((self.config / 'automations.yaml.pre-git').is_file())
+        self.assertTrue((self.config / 'custom_components.pre-git/hacs').is_dir())
+        self.assertEqual(len(self.ha.posts('/restart')), 1)
+
+        same_tree = self.deploy({}, source='b' * 40)
+        self.assertEqual(self.hook(same_tree).returncode, 0)
+        self.assertEqual(self.recorded('installed'), same_tree)
+        self.assertEqual(len(self.ha.posts()), 2)  # The rejection notification and the migration restart.
+
+    def test_rollback_repairs_an_interrupted_integration_install(self):
+        self.ha.start()
+        self.ha.state = 'RUNNING'
+        path = 'custom_components/demo/version'
+        original = self.deploy({'configuration.yaml': 'v1', path: 'old',
+                                'custom_components/obsolete/version': 'old'}, source='a' * 40)
+        self.assertEqual(self.hook(original).returncode, 0)
+
+        update = self.deploy({path: 'new'}, remove=['custom_components/obsolete'], source='b' * 40)
+        unreadable = self.work / path
+        unreadable.chmod(0)
+        try:
+            self.assertNotEqual(self.hook(update).returncode, 0)
+        finally:
+            unreadable.chmod(0o644)
+        self.assertFalse((self.config / 'custom_components/obsolete').exists())
+        git(self.work, 'checkout', '-q', original)
+        self.assertEqual(self.hook(original).returncode, 0)
+        self.assertEqual((self.config / 'custom_components/obsolete/version').read_text(), 'old')
+        self.assertEqual(len(self.ha.posts('/restart')), 2)
 
     def test_preserves_required_restarts_across_outages_and_install_failures(self):
         self.ha.start()
