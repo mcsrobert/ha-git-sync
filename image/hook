@@ -15,8 +15,10 @@ commit=${GITSYNC_HASH:?}
 mkdir -p "$state/notifications" "$state/trees"
 
 record() {
-  printf '%s\n' "$2" > "$state/.$1"
-  mv "$state/.$1" "$state/$1"
+  local key=$1
+  shift
+  printf '%s\n' "$@" > "$state/.$key"
+  mv "$state/.$key" "$state/$key"
 }
 
 recorded() {
@@ -157,7 +159,7 @@ own() {
     if [[ $1 == "$config/custom_components" ]]; then
       local component
       for component in "$1"/*/; do
-        [[ -d $component ]] && record restart "$built_from" && break
+        [[ -d $component ]] && record restart "$commit" && break
       done
     fi
     aside "$1"
@@ -173,14 +175,13 @@ tree() {
 
 # Replace everything in $2 with the folders of $1 in this commit, unless its marker shows they are installed.
 install() {
-  local source=$1 target=$2 want have entry name
-  want=$(tree "$source")
+  local source=$1 target=$config/$1 want=$2 have entry name
   have=$(cat "$target/.git-sync")
   if [[ $want == "$have" ]]; then
     return
   fi
   if [[ $source == custom_components ]]; then
-    record restart "$built_from"
+    record restart "$commit"
     rm -f "$state/reloaded"
   fi
   printf 'installing\n' > "$target/.git-sync.new"
@@ -214,8 +215,25 @@ if [[ -z $built_from ]]; then
 build, so nothing was installed or reloaded. The next CI run on the main branch restores it."
     record rejected "$commit"
   fi
-  send_notifications
-  exit 0
+  # An interrupted install can have changed live files. Restore the retained tree, even after git-sync prunes it.
+  previous=()
+  if [[ ! -f $state/installed && -f $state/previous ]]; then
+    mapfile -t previous < "$state/previous"
+  fi
+  if ((${#previous[@]} != 4)); then
+    send_notifications
+    exit 0
+  fi
+  commit=${previous[0]}
+  content=${previous[1]}
+  components=${previous[2]}
+  cards=${previous[3]}
+  cd "$state/trees/$content"
+else
+  content=$(git rev-parse "$commit^{tree}")
+  components=$(tree custom_components)
+  cards=$(tree www/community)
+  rm -f "$state/rejected"
 fi
 
 if [[ $(readlink "$config/configuration.yaml" || true) != "$current/configuration.yaml" ]]; then
@@ -225,19 +243,17 @@ if [[ $(readlink "$config/configuration.yaml" || true) != "$current/configuratio
     fi
   done
 fi
-if [[ $(recorded installed) != "$commit" ]]; then
-  rm -f "$state/installed"
+if [[ -f $state/installed && $(head -n 1 "$state/installed") != "$commit" ]]; then
+  mv "$state/installed" "$state/previous"
 fi
-rm -f "$state/rejected"
 if [[ ! -d $config/www ]]; then
   mkdir -m 2775 "$config/www"
 fi
 own "$config/custom_components"
 own "$config/www/community"
-install custom_components "$config/custom_components"
-install www/community "$config/www/community"
+install custom_components "$components"
+install www/community "$cards"
 
-content=$(git rev-parse "$commit^{tree}")
 snapshot=$state/trees/$content
 if [[ ! -d $snapshot ]]; then
   rm -rf "$state/staging"
@@ -248,13 +264,22 @@ if [[ ! -d $snapshot ]]; then
   )
   mv "$state/staging" "$snapshot"
 fi
+if [[ $(readlink "$config/$current" || true) != "state/trees/$content" ]]; then
+  rm -f "$state/reloaded" "$state/applied"
+fi
 link
 ln -sfnT "state/trees/$content" "$state/.current"
 mv -Tf "$state/.current" "$config/$current"
-record installed "$commit"
+record installed "$commit" "$content" "$components" "$cards"
+rm -f "$state/previous"
 for old in "$state/trees"/*; do
   [[ $old == "$snapshot" ]] || rm -rf "$old"
 done
+
+if [[ -z $built_from ]]; then
+  send_notifications
+  exit 0
+fi
 
 if [[ $(recorded reloaded) != "$commit" && (-s $state/restart || $(recorded applied) != "$content") ]]; then
   ha=$(api config)

@@ -193,7 +193,7 @@ class SidecarTest(unittest.TestCase):
 
     def recorded(self, name):
         path = self.state / name
-        return path.read_text().strip() if path.exists() else None
+        return path.read_text().splitlines()[0] if path.exists() else None
 
     def links(self):
         return {path.name: str(path.readlink()) for path in self.config.iterdir() if path.is_symlink()}
@@ -345,10 +345,29 @@ class SidecarTest(unittest.TestCase):
         finally:
             unreadable.chmod(0o644)
         self.assertFalse((self.config / 'custom_components/obsolete').exists())
+        stray = self.deploy({'configuration.yaml': 'stray'})
+        self.assertEqual(self.hook(stray).returncode, 0)
+        self.assertEqual(self.recorded('installed'), original)
+        self.assertEqual((self.config / 'configuration.yaml').read_text(), 'v1')
+        self.assertEqual((self.config / 'custom_components/obsolete/version').read_text(), 'old')
         git(self.work, 'checkout', '-q', original)
         self.assertEqual(self.hook(original).returncode, 0)
         self.assertEqual((self.config / 'custom_components/obsolete/version').read_text(), 'old')
         self.assertEqual(len(self.ha.posts('/restart')), 2)
+
+    def test_rollback_after_startup_reloads_the_restored_configuration(self):
+        self.ha.start()
+        self.ha.state = 'RUNNING'
+        original = self.deploy({'configuration.yaml': 'v1'}, source='a' * 40)
+        self.assertEqual(self.hook(original).returncode, 0)
+        self.ha.state = 'STARTING'
+        update = self.deploy({'configuration.yaml': 'v2'}, source='b' * 40)
+        self.assertNotEqual(self.hook(update).returncode, 0)
+        self.assertEqual((self.config / 'configuration.yaml').read_text(), 'v2')
+        self.ha.state = 'RUNNING'
+        git(self.work, 'checkout', '-q', original)
+        self.assertEqual(self.hook(original).returncode, 0)
+        self.assertEqual(len(self.ha.posts('/reload_all')), 2)
 
     def test_preserves_required_restarts_across_outages_and_install_failures(self):
         self.ha.start()

@@ -2,6 +2,6 @@
 # A rejected tip can use the last fully installed, retained configuration.
 cd /config/.git-sync || exit 1
 tip=$(readlink incoming) &&
-  installed=$(cat state/installed 2> /dev/null) &&
+  installed=$(head -n 1 state/installed 2> /dev/null) &&
   [[ -n $installed && $(readlink current) == state/trees/* && -f current/configuration.yaml &&
     (${tip##*/} == "$installed" || ${tip##*/} == "$(cat state/rejected 2> /dev/null)") ]]
