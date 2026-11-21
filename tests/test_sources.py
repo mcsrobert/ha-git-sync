@@ -48,6 +48,11 @@ class LoadTest(unittest.TestCase):
     def test_rejects_unknown_top_level_keys(self):
         self.assertInvalid('themes: []\n', 'only contain')
 
+    def test_rejects_wrong_empty_collections(self):
+        self.assertInvalid('[]', 'only contain')
+        self.assertInvalid('integrations: {}', 'integrations must be a list')
+        self.assertInvalid('cards: ""', 'cards must be a list')
+
     def test_rejects_keys_out_of_renovate_order(self):
         self.assertInvalid('integrations:\n  - version: v1\n    repository: a/b\n    asset: b.zip\n', 'in that order')
 

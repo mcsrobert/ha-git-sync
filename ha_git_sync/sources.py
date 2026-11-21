@@ -17,7 +17,12 @@ SHAPES = {
 
 
 class Loader(yaml.BaseLoader):
-    """Keeps every value a string and rejects duplicate keys, which PyYAML would silently overwrite."""
+    """Keep scalars as strings except for omitted values, and reject duplicate keys."""
+
+    def construct_scalar(self, node):
+        if node.style is None and node.value == '':
+            return None
+        return super().construct_scalar(node)
 
     def construct_mapping(self, node, deep=False):
         keys = [self.construct_object(key) for key, _ in node.value]
@@ -45,12 +50,16 @@ class Source:
 
 
 def load(text):
-    data = yaml.load(text, Loader=Loader) or {}
+    data = yaml.load(text, Loader=Loader)
+    if data is None:
+        return []
     if not isinstance(data, dict) or set(data) - set(SHAPES):
         raise Error('hacs.yaml may only contain the lists integrations and cards')
     sources = []
     for category, shapes in SHAPES.items():
-        entries = data.get(category) or []
+        entries = data.get(category)
+        if entries is None:
+            continue
         if not isinstance(entries, list):
             raise Error(f'{category} must be a list')
         for entry in entries:

@@ -5,6 +5,8 @@ import subprocess
 import tempfile
 import unittest
 
+import yaml
+
 CHECK = Path(__file__).resolve().parents[1] / 'check'
 
 
@@ -47,6 +49,16 @@ class PythonVersionTest(unittest.TestCase):
         result, _ = run('resolve-python.sh', '2026.10.4', response='3.14.9', exit_code=22)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(result.stdout, '')
+
+    def test_action_propagates_resolver_failure(self):
+        steps = yaml.safe_load((CHECK / 'action.yaml').read_text())['runs']['steps']
+        resolve = next(step['run'] for step in steps if step.get('id') == 'python')
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / 'output'
+            result = subprocess.run(['bash', '-e', '-c', resolve], capture_output=True, env={
+                **os.environ, 'VERSION': 'invalid', 'GITHUB_ACTION_PATH': str(CHECK), 'GITHUB_OUTPUT': str(output)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(output.exists())
 
 
 if __name__ == '__main__':

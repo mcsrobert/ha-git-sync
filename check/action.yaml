@@ -22,7 +22,9 @@ runs:
       shell: bash
       env:
         VERSION: ${{ inputs.home-assistant-version }}
-      run: echo "version=$("${GITHUB_ACTION_PATH}/resolve-python.sh" "${VERSION}")" >> "${GITHUB_OUTPUT}"
+      run: |
+        version=$("${GITHUB_ACTION_PATH}/resolve-python.sh" "${VERSION}")
+        echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
     - name: Set up Python
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -35,7 +37,10 @@ runs:
         GH_TOKEN: ${{ github.token }}
       run: |
         version=$(sed -n 's/^gitleaks = "\(.*\)"/\1/p' "${GITHUB_ACTION_PATH}/../mise.toml")
-        asset="gitleaks_${version}_linux_x64.tar.gz"
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64 | Linux-ARM64) asset="gitleaks_${version}_linux_${RUNNER_ARCH,,}.tar.gz" ;;
+          *) echo "::error::Unsupported gitleaks runner: ${RUNNER_OS} ${RUNNER_ARCH}"; exit 1 ;;
+        esac
         digest=$(gh api "repos/gitleaks/gitleaks/releases/tags/v${version}" \
           --jq ".assets[] | select(.name == \"${asset}\") | .digest")
         mkdir -p "${RUNNER_TEMP}/ha-git-sync"

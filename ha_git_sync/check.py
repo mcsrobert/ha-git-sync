@@ -8,10 +8,10 @@ import tempfile
 
 import yaml
 
+from .build import INSTALLED
 from .errors import Error
 
 CURRENT = '.git-sync/current'
-INSTALLED = ('custom_components', 'www/community')
 UNLINKED = ('custom_components', 'www')
 PLACEHOLDER = 'check-config-placeholder'
 # Fallback for files PyYAML cannot parse; check_config reports those files itself.
