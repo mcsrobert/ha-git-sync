@@ -10,6 +10,9 @@ if [[ -n ${3:-} ]]; then
   secrets=(--secrets "$(cd "$(dirname "$3")" && pwd)/$(basename "$3")")
 fi
 
+build_token=${GITHUB_TOKEN:-${GH_TOKEN:-$(gh auth token 2> /dev/null || true)}}
+export -n build_token
+unset GITHUB_TOKEN GH_TOKEN
 python_version=$("$root/check/resolve-python.sh" "$version")
 venv=$root/.venv/home-assistant-$version
 if [[ ! -x $venv/bin/python ]]; then
@@ -23,7 +26,6 @@ uv pip install --quiet --python "$venv/bin/python" "${requirements[@]}"
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 export PYTHONPATH=$root
-GITHUB_TOKEN=${GITHUB_TOKEN:-$(gh auth token 2> /dev/null || true)} \
+GITHUB_TOKEN=$build_token \
   "$venv/bin/python" -P -m ha_git_sync build "$source" "$out/deploy"
-unset GITHUB_TOKEN GH_TOKEN
 "$venv/bin/python" -P -m ha_git_sync check "$out/deploy" "${secrets[@]}"

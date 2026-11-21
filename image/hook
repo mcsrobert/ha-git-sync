@@ -194,7 +194,8 @@ install() {
   done
   for entry in "$source"/*/; do
     [[ -d $entry ]] || continue
-    name=$(basename "$entry")
+    name=${entry%/}
+    name=${name##*/}
     cp -R "$source/$name" "$target/.$name.new"
     if [[ -e $target/$name ]]; then
       mv "$target/$name" "$target/.$name.old"

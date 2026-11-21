@@ -216,6 +216,7 @@ class SidecarTest(unittest.TestCase):
                              'automations/a.yaml': '[]\n', 'pyscript/app.py': 'app',
                              'blueprints/automation/b.yaml': 'b', 'custom_components/retry/manifest.json': 'retry v1',
                              'custom_components/retry/sub/x.py': '1', 'custom_components/nordpool/manifest.json': 'np',
+                             'www/community/card\n/name.js': 'newline',
                              'www/community/card/card.js': 'card v1'}, source='a' * 40)
         wait(lambda: self.ready(name), 'ready after the first install')
         self.assertEqual(self.links(), {entry: f'.git-sync/current/{entry}' for entry in
@@ -229,6 +230,7 @@ class SidecarTest(unittest.TestCase):
             self.assertFalse((self.config / editor).exists(), editor)
         self.assertTrue((self.config / 'custom_components.pre-git' / 'hacs').is_dir())
         self.assertTrue((self.config / 'www' / 'community.pre-git' / 'oldcard').is_dir())
+        self.assertEqual((self.config / 'www/community/card\n/name.js').read_text(), 'newline')
         self.assertTrue((self.config / 'www' / 'local.png').is_file())
         self.assertTrue((self.config / '.storage' / 'core.config').is_file())
         self.assertEqual((self.config / 'custom_components' / 'retry' / 'sub' / 'x.py').read_text(), '1')
