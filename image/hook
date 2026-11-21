@@ -74,7 +74,7 @@ excerpt() {
   local text
   if (($(wc -c < "$state/response") > 1000)); then
     # Keep the lookahead byte even when it is a newline, then remove the character containing it.
-    text=$(head -c 1001 "$state/response"; printf .)
+    text=$(head -c 1001 "$state/response" | tr '\000' ' '; printf .)
     text=${text%.}
     while [[ $text == *[$'\x80'-$'\xbf'] ]]; do
       text=${text%?}

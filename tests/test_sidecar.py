@@ -40,7 +40,7 @@ class HomeAssistant:
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def respond(self, status, body):
-                data = json.dumps(body, ensure_ascii=False).encode()
+                data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
                 self.send_response(status)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(data)))
@@ -74,7 +74,8 @@ class HomeAssistant:
                         return self.respond(ha.notification_status, {})
                     ha.notes.append(data)
                 if self.path.endswith(('/reload_all', '/restart')) and ha.status != 200:
-                    return self.respond(ha.status, {'message': ha.message})
+                    body = ha.message if isinstance(ha.message, bytes) else {'message': ha.message}
+                    return self.respond(ha.status, body)
                 if self.path.endswith('/restart') and ha.restart_closes:
                     self.close_connection = True
                     return
@@ -391,6 +392,11 @@ class SidecarTest(unittest.TestCase):
         self.assertEqual(len(self.ha.notifications('restart')), 2, 'a notification cut in a character was rejected')
         expected = json.dumps({'message': self.ha.message}, ensure_ascii=False).encode()[:1000]
         self.assertTrue(self.ha.notifications('restart')[1]['message'].endswith(expected.decode(errors='ignore')))
+
+        self.ha.message = b'a' * 1000 + b'\0tail'
+        binary = self.deploy({'configuration.yaml': 'v3\n'}, source='d' * 40)
+        self.assertEqual(self.hook(binary).returncode, 0)
+        self.assertTrue(self.ha.notifications('restart')[-1]['message'].endswith('a' * 1000))
 
     def test_restarts_quietly_and_retries_failed_hooks(self):
         self.ha.start()
