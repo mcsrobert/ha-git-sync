@@ -49,6 +49,8 @@ Lay it out the way Home Assistant expects `/config`, with `configuration.yaml` a
 - `blueprints/` without a blueprint in each of `automation/`, `script/` and `template/`, because Home Assistant would
   write its defaults into the checkout.
 - Symlinks or submodules.
+- Files or hidden directories directly inside `custom_components/` or the generated `www/community/`. The hook
+  installs each visible child directory as one integration or card.
 
 Commit your own integrations to `custom_components/`. Pin the rest in `hacs.yaml`, either as a release asset, which
 `check` verifies against the SHA-256 digest GitHub publishes, or as the commit a tag points to:

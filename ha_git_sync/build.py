@@ -12,6 +12,7 @@ from .errors import Error
 from .github import unzip
 
 EXCLUDED = ('.github',)
+INSTALLED = ('custom_components', 'www/community')
 EDITOR_FILES = ('automations.yaml', 'scripts.yaml', 'scenes.yaml')
 BLUEPRINT_DOMAINS = ('automation', 'script', 'template')
 DOMAIN = re.compile(r'[a-z0-9_]+')
@@ -34,10 +35,14 @@ def build(source, output, github):
                 continue
             (root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source / name, root / name)
-        (root / 'custom_components').mkdir(exist_ok=True)
-        (root / 'www' / 'community').mkdir(parents=True)
+        for name in INSTALLED:
+            (root / name).mkdir(parents=True, exist_ok=True)
         for item in pinned:
             print(f'{item} -> {install(item, root, github)}')
+        for name in INSTALLED:
+            for entry in (root / name).iterdir():
+                if entry.name.startswith('.') or not entry.is_dir():
+                    raise Error(f'{entry.relative_to(root)}: the sidecar installs only visible directories in {name}')
         normalize(root)
         root.rename(output)
 

@@ -170,6 +170,16 @@ cards:
         self.build()
         self.assertIn('custom_components/mine/manifest.json', self.files())
 
+    def test_rejects_entries_the_sidecar_would_skip(self):
+        for name in ('custom_components/shared.py', 'custom_components/.mine/manifest.json'):
+            with self.subTest(name=name):
+                self.write(name, '')
+                self.assertFails('installs only visible directories')
+                shutil.rmtree(self.source / 'custom_components')
+        self.server.release('o/.card', 'v1', {'card.js': b'js'})
+        self.write('hacs.yaml', 'cards:\n  - repository: o/.card\n    version: v1\n    asset: card.js\n')
+        self.assertFails('installs only visible directories')
+
     def test_rejects_a_pinned_integration_the_repository_already_has(self):
         self.write('custom_components/a/manifest.json', '{"domain": "a"}')
         self.install_zip(zip_bytes({'manifest.json': '{"domain": "a"}'}))
