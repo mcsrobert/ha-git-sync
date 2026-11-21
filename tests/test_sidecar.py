@@ -216,7 +216,7 @@ class SidecarTest(unittest.TestCase):
         self.assertEqual((self.config / 'custom_components' / 'retry' / 'sub' / 'x.py').read_text(), '1')
         self.assertFalse((self.config / 'custom_components' / 'retry').is_symlink())
         self.assertEqual((self.config / 'www' / 'community' / 'card' / 'card.js').read_text(), 'card v1')
-        self.assertIsNone(self.recorded('restart'), 'restarts a Home Assistant that was down during the install')
+        self.assertTrue(self.recorded('restart'), 'lost the restart while the API was unreachable')
 
         mirror = self.tmp / 'mirror'
         layout((self.config / '.git-sync' / 'current').resolve(), mirror)
@@ -227,17 +227,17 @@ class SidecarTest(unittest.TestCase):
         wait(lambda: self.ha.calls, 'a call once Home Assistant answers')
         self.assertEqual(self.ha.posts('/reload_all'), [], 'reloaded while Home Assistant starts')
         self.ha.state = 'RUNNING'
-        wait(lambda: self.recorded('reloaded') == first, 'reload once Home Assistant runs')
-        self.assertEqual(len(self.ha.posts('/reload_all')), 1)
-        self.assertEqual(self.ha.posts('/restart'), [], 'restarted after the first install')
+        wait(lambda: self.recorded('reloaded') == first, 'restart once Home Assistant runs')
+        self.assertEqual(self.ha.posts('/reload_all'), [])
+        self.assertEqual(len(self.ha.posts('/restart')), 1)
         self.assertTrue(all(call[2] == f'Bearer {TOKEN}' for call in self.ha.calls))
         self.assertEqual(self.ha.notifications(), [], 'notified after the first install')
 
         second = self.deploy({'configuration.yaml': 'v2\n', 'custom_components/retry/manifest.json': 'retry v2'},
                              source='b' * 40, remove=['custom_components/retry/sub', 'pyscript'])
         wait(lambda: self.recorded('reloaded') == second, 'restart for the second deploy')
-        self.assertEqual(len(self.ha.posts('/homeassistant/restart')), 1)
-        self.assertEqual(len(self.ha.posts('/reload_all')), 1, 'reloaded instead of restarting')
+        self.assertEqual(len(self.ha.posts('/homeassistant/restart')), 2)
+        self.assertEqual(len(self.ha.posts('/reload_all')), 0, 'reloaded instead of restarting')
         self.assertIsNone(self.recorded('restart'))
         self.assertEqual((self.config / 'custom_components' / 'retry' / 'manifest.json').read_text(), 'retry v2')
         self.assertFalse((self.config / 'custom_components' / 'retry' / 'sub').exists())
@@ -247,14 +247,14 @@ class SidecarTest(unittest.TestCase):
         third = self.deploy({'configuration.yaml': 'v3\n', 'www/community/card/card.js': 'card v2'}, source='c' * 40)
         wait(lambda: self.recorded('reloaded') == third, 'reload of a deploy that changes a card')
         self.assertEqual((self.config / 'www' / 'community' / 'card' / 'card.js').read_text(), 'card v2')
-        self.assertEqual(len(self.ha.posts('/reload_all')), 2)
-        self.assertEqual(len(self.ha.posts('/homeassistant/restart')), 1, 'restarted for a card')
+        self.assertEqual(len(self.ha.posts('/reload_all')), 1)
+        self.assertEqual(len(self.ha.posts('/homeassistant/restart')), 2, 'restarted for a card')
         self.assertEqual(self.ha.notifications(), [], 'notified about a deploy that worked')
 
         stray = self.deploy({'configuration.yaml': 'stray\n'})
         wait(lambda: self.recorded('reloaded') == stray, 'stray commit handled')
         self.assertTrue(self.ha.notifications('deploy'))
-        self.assertEqual(len(self.ha.posts('/reload_all')), 2, 'reloaded a commit CI did not build')
+        self.assertEqual(len(self.ha.posts('/reload_all')), 1, 'reloaded a commit CI did not build')
         self.assertTrue(self.ready(name), 'a stray commit kept Home Assistant from starting')
 
         self.ha.status = 500
@@ -274,8 +274,8 @@ class SidecarTest(unittest.TestCase):
         (self.config / 'automations.yaml').write_text('- id: ui\n')
         sixth = self.deploy({'configuration.yaml': 'v6\n'}, source='f' * 40)
         wait(lambda: self.recorded('reloaded') == sixth, 'restart left over from the fifth deploy')
-        self.assertEqual(len(self.ha.posts('/homeassistant/restart')), 3)
-        self.assertEqual(len(self.ha.posts('/reload_all')), 3)
+        self.assertEqual(len(self.ha.posts('/homeassistant/restart')), 4)
+        self.assertEqual(len(self.ha.posts('/reload_all')), 2)
         self.assertIsNone(self.recorded('restart'))
         wait(lambda: self.ha.notifications('editor'), 'editor notification')
         self.assertIn('automations.yaml', self.ha.notifications('editor')[0]['message'])
@@ -286,7 +286,7 @@ class SidecarTest(unittest.TestCase):
         status = docker('inspect', '--format', '{{.State.Health.Status}}', name).stdout.strip()
         self.assertEqual(status, 'healthy')
 
-    def test_restarts_only_when_home_assistant_runs_replaced_integrations(self):
+    def test_preserves_required_restarts_across_outages_and_install_failures(self):
         self.ha.start()
         self.ha.state = 'RUNNING'
         plain = self.deploy({'configuration.yaml': 'v1\n'}, source='a' * 40)
@@ -301,11 +301,11 @@ class SidecarTest(unittest.TestCase):
         down = self.deploy({'custom_components/retry/manifest.json': 'v2'}, source='c' * 40)
         self.assertIn('not reachable', self.hook(down).stderr)
         self.assertEqual(self.recorded('installed'), down)
-        self.assertIsNone(self.recorded('restart'), 'restarts a Home Assistant that was down during the install')
+        self.assertTrue(self.recorded('restart'), 'lost the restart while the API was unreachable')
         self.ha.start()
         self.assertEqual(self.hook(down).returncode, 0)
-        self.assertEqual(len(self.ha.posts('/reload_all')), 2)
-        self.assertEqual(len(self.ha.posts('/restart')), 1)
+        self.assertEqual(len(self.ha.posts('/reload_all')), 1)
+        self.assertEqual(len(self.ha.posts('/restart')), 2)
 
         self.ha.status = 500
         refused = self.deploy({'custom_components/retry/manifest.json': 'v3'}, source='d' * 40)
@@ -313,7 +313,7 @@ class SidecarTest(unittest.TestCase):
         self.assertTrue(self.recorded('restart'), 'forgot a refused restart')
         self.ha.stop()
         self.assertEqual(self.hook(refused).returncode, 0)
-        self.assertIsNone(self.recorded('restart'), 'kept a restart while Home Assistant was down')
+        self.assertTrue(self.recorded('restart'), 'lost a refused restart during an API outage')
         self.ha.start()
         self.ha.status = 200
 
@@ -326,7 +326,7 @@ class SidecarTest(unittest.TestCase):
         self.assertEqual((self.config / 'custom_components' / 'retry' / 'manifest.json').read_text(), 'v4')
         community.chmod(0o755)
         self.assertEqual(self.hook(halfway).returncode, 0)
-        self.assertEqual(len(self.ha.posts('/restart')), 3, 'lost the restart when the hook failed halfway')
+        self.assertEqual(len(self.ha.posts('/restart')), 4, 'lost the restart when the hook failed halfway')
 
     def test_retries_notifications_without_repeating_the_deploy(self):
         self.ha.start()

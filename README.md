@@ -13,8 +13,9 @@ main ─────────> check ─> promote ─> deployed ─> sidecar 
 - **`promote`**, a GitHub Action, commits the tree `check` built on `main` to the `deployed` branch.
 - **The sidecar** runs next to Home Assistant. It is [git-sync](https://github.com/kubernetes/git-sync) following
   `deployed`, plus a hook that puts the checkout in `/config` and calls `homeassistant.reload_all`. When custom
-  integrations change while Home Assistant runs, it calls `homeassistant.restart` instead, because Home Assistant
-  loads them only at startup. Home Assistant checks the configuration first and refuses either when it is not valid.
+  integrations change, it calls `homeassistant.restart` once Home Assistant is running. This includes a first
+  install with integrations because an API outage can hide an instance that still has old code loaded.
+  Home Assistant checks the configuration first and refuses either when it is not valid.
 
 ## What gets written where
 
