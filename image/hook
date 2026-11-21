@@ -173,7 +173,7 @@ tree() {
   git rev-parse --verify --quiet "$commit:$1" || true
 }
 
-# Replace everything in $2 with the folders of $1 in this commit, unless its marker shows they are installed.
+# Replace everything in $config/$1 with the folders of $1 if its marker does not match $2.
 install() {
   local source=$1 target=$config/$1 want=$2 have entry name
   have=$(cat "$target/.git-sync")
