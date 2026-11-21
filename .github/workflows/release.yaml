@@ -70,12 +70,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          if output=$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${IMAGE}:${VERSION}" 2>&1); then
-            gh attestation verify "oci://${IMAGE}@${output}" --repo "${GITHUB_REPOSITORY}" \
+          ref="${IMAGE}:${VERSION}"
+          manifest="${RUNNER_TEMP}/release-manifest.json"
+          if output=$(docker buildx imagetools inspect --raw "${ref}" 2>&1 > "${manifest}"); then
+            checksum=$(sha256sum "${manifest}")
+            digest="sha256:${checksum%% *}"
+            gh attestation verify "oci://${IMAGE}@${digest}" --repo "${GITHUB_REPOSITORY}" \
               --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yaml" \
               --source-ref "${GITHUB_REF}" --source-digest "${GITHUB_SHA}"
-            echo "digest=${output}" >> "${GITHUB_OUTPUT}"
-          elif [[ $output != *": not found"* ]]; then
+            echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+          elif [[ $output != *" ${ref}: not found" && $output != "${ref}: not found" ]]; then
             echo "::error::Could not check whether ${IMAGE}:${VERSION} exists: ${output}"
             exit 1
           fi
