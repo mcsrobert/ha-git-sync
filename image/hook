@@ -89,6 +89,12 @@ send_notifications() {
     [[ -f $file ]] || continue
     status=$(api services/persistent_notification/create --data-binary @"$file")
     answered "$status"
+    case $status in
+      408 | 429 | 5[0-9][0-9])
+        echo "Creating notification ${file##*/} failed with HTTP $status; retrying later" >&2
+        return 1
+        ;;
+    esac
     if [[ $status != 200 ]]; then
       echo "Home Assistant rejected the notification ${file##*/} (HTTP $status): $(excerpt)" >&2
     fi
