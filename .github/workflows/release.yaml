@@ -139,6 +139,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           changelog=$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --json body --jq .body)
+          changelog=${changelog//$'\r'/}
           header=$(printf 'Image: `%s:%s@%s`\n\nActions: `%s/check@%s` and `%s/promote@%s`' \
             "${IMAGE}" "${VERSION}" "${DIGEST}" "${GITHUB_REPOSITORY}" "${GITHUB_REF_NAME}" "${GITHUB_REPOSITORY}" "${GITHUB_REF_NAME}")
           if [[ $changelog != "$header" && $changelog != "$header"$'\n\n'* ]]; then
