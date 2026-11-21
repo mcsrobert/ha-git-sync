@@ -10,9 +10,12 @@ from .errors import Error
 REPOSITORY = re.compile(r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?/[A-Za-z0-9_.-]+')
 VERSION = re.compile(r'[A-Za-z0-9][A-Za-z0-9._+-]*')
 COMMIT = re.compile(r'[0-9a-f]{40}')
+SHA256 = re.compile(r'[0-9a-f]{64}')
 SHAPES = {
-    'integrations': (('repository', 'version', 'asset'), ('repository', 'version', 'commit')),
-    'cards': (('repository', 'version', 'asset'), ('repository', 'version', 'commit', 'path')),
+    'integrations': (('repository', 'version', 'asset'), ('repository', 'version', 'sha256', 'asset'),
+                     ('repository', 'version', 'commit')),
+    'cards': (('repository', 'version', 'asset'), ('repository', 'version', 'sha256', 'asset'),
+              ('repository', 'version', 'commit', 'path')),
 }
 
 
@@ -40,6 +43,7 @@ class Source:
     asset: str | None = None
     commit: str | None = None
     path: str | None = None
+    sha256: str | None = None
 
     @property
     def name(self):
@@ -87,6 +91,8 @@ def parse(category, shapes, entry):
             raise Error(f'invalid asset name for {source.repository}: {source.asset!r}')
         if category == 'integrations' and not source.asset.endswith('.zip'):
             raise Error(f'integration asset must be a .zip: {source.repository}')
+    if source.sha256 is not None and not SHA256.fullmatch(source.sha256):
+        raise Error(f'sha256 must be a lowercase hex SHA-256: {source.repository}')
     if source.commit is not None and not COMMIT.fullmatch(source.commit):
         raise Error(f'commit must be a full lowercase SHA: {source.repository}')
     if source.path is not None:

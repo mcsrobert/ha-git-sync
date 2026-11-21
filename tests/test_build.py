@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import io
 import os
 from pathlib import Path
@@ -113,6 +114,17 @@ cards:
             'www/community/dist-card/dist-card.js',
         ])
         self.assertIn('o/source 1.0 -> custom_components/src', log)
+
+    def test_installs_assets_by_pinned_sha256(self):
+        self.server.release('o/card', 'v1', {'card.js': b'js'}, digests={'card.js': None})
+        self.write('hacs.yaml', 'cards:\n  - repository: o/card\n    version: v1\n'
+                   f'    sha256: {hashlib.sha256(b"js").hexdigest()}\n    asset: card.js\n')
+        self.build()
+        self.assertIn('www/community/card/card.js', self.files())
+        shutil.rmtree(self.output)
+        self.write('hacs.yaml', 'cards:\n  - repository: o/card\n    version: v1\n'
+                   f'    sha256: {"0" * 64}\n    asset: card.js\n')
+        self.assertFails('does not match its pinned sha256')
 
     def test_normalizes_permissions(self):
         self.write('pyscript/run.py', '')

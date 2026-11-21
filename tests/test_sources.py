@@ -8,6 +8,10 @@ integrations:
   - repository: amitfin/retry
     version: v4.2.0
     asset: retry.zip
+  - repository: hacs/integration
+    version: 2.0.5
+    sha256: 97be6b824a4f38e683728cc6dd72367f6b8bad0a43428b1b3b987a3087adf413
+    asset: hacs.zip
   - repository: custom-components/nordpool
     version: 0.0.18
     commit: 1eaa2490943bb41a2e322e9349ba2d7c6746a94b
@@ -26,6 +30,8 @@ class LoadTest(unittest.TestCase):
     def test_valid_file(self):
         self.assertEqual(load(VALID), [
             Source('integrations', 'amitfin/retry', 'v4.2.0', asset='retry.zip'),
+            Source('integrations', 'hacs/integration', '2.0.5', asset='hacs.zip',
+                   sha256='97be6b824a4f38e683728cc6dd72367f6b8bad0a43428b1b3b987a3087adf413'),
             Source('integrations', 'custom-components/nordpool', '0.0.18',
                    commit='1eaa2490943bb41a2e322e9349ba2d7c6746a94b'),
             Source('cards', 'RomRider/apexcharts-card', 'v2.2.3', asset='apexcharts-card.js'),
@@ -55,6 +61,8 @@ class LoadTest(unittest.TestCase):
 
     def test_rejects_keys_out_of_renovate_order(self):
         self.assertInvalid('integrations:\n  - version: v1\n    repository: a/b\n    asset: b.zip\n', 'in that order')
+        self.assertInvalid('integrations:\n  - repository: a/b\n    version: v1\n    asset: b.zip\n    sha256: '
+                           + 'a' * 64 + '\n', 'in that order')
 
     def test_rejects_wrong_shape_per_category(self):
         self.assertInvalid('cards:\n  - repository: a/b\n    version: v1\n    commit: ' + 'a' * 40 + '\n', 'in that order')
@@ -70,6 +78,9 @@ class LoadTest(unittest.TestCase):
         self.assertInvalid(entry.format('a/b', 'v1', 'b.tar.gz'), 'must be a .zip')
         self.assertInvalid(entry.format('a/b', '[v1]', 'b.zip'), 'plain strings')
         self.assertInvalid('integrations:\n  - repository: a/b\n    version: v1\n    commit: ABC\n', 'full lowercase SHA')
+        pinned = 'cards:\n  - repository: a/b\n    version: v1\n    sha256: {}\n    asset: b.js\n'
+        for sha256 in ('A' * 64, 'a' * 63, 'sha256:' + 'a' * 64):
+            self.assertInvalid(pinned.format(sha256), 'lowercase hex SHA-256')
 
     def test_rejects_unsafe_paths(self):
         card = 'cards:\n  - repository: a/b\n    version: v1\n    commit: ' + 'a' * 40 + '\n    path: {}\n'
