@@ -31,12 +31,11 @@ api() {
     --write-out '%{http_code} %{exitcode}' \
     --header @<(printf 'Authorization: Bearer %s\n' "$(< "$token_file")") \
     --header 'Content-Type: application/json' "${@:2}" "$ha_url/api/$1") || true
-  case ${result% *} in
-    [45][0-9][0-9])
-      echo "${result% *}"
-      return
-      ;;
-  esac
+  if [[ $1 == services/homeassistant/restart && ${result% *} == [45][0-9][0-9] && ${result#* } != 0 ]]; then
+    printf '%s' 'The error response was interrupted.' > "$state/response"
+    echo "${result% *}"
+    return
+  fi
   case ${result#* } in
     0) echo "${result% *}" ;;
     6 | 7) echo down ;;

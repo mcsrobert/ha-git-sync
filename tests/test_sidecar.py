@@ -29,7 +29,7 @@ class HomeAssistant:
         self.state = 'STARTING'
         self.status = 200
         self.message = 'The configuration is not valid'
-        self.truncate_error = False
+        self.truncated_error_path = None
         self.restart_closes = True
         self.drop_notifications = False
         self.calls = []
@@ -42,8 +42,9 @@ class HomeAssistant:
                 data = json.dumps(body, ensure_ascii=False).encode()
                 self.send_response(status)
                 self.send_header('Content-Type', 'application/json')
-                length = len(data) + int(ha.truncate_error and status >= 400)
-                self.send_header('Content-Length', str(length))
+                self.send_header('Content-Length', str(len(data)))
+                if self.path == ha.truncated_error_path:
+                    data = data[:data.index('é'.encode()) + 1]
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -62,6 +63,8 @@ class HomeAssistant:
                     data = json.loads(body.decode())
                 except ValueError:
                     return self.respond(400, {'message': 'Data should be valid JSON.'})
+                if self.path == ha.truncated_error_path:
+                    return self.respond(503, {'message': 'échec'})
                 if self.path.endswith('/persistent_notification/create'):
                     if ha.drop_notifications:
                         self.close_connection = True
@@ -319,11 +322,14 @@ class SidecarTest(unittest.TestCase):
         self.assertEqual(len(self.ha.posts('/restart')), 2)
 
         self.ha.status = 500
-        self.ha.truncate_error = True
+        self.ha.truncated_error_path = '/api/services/homeassistant/restart'
         refused = self.deploy({'custom_components/retry/manifest.json': 'v3'}, source='d' * 40)
         self.assertEqual(self.hook(refused).returncode, 0)
         self.assertTrue(self.recorded('restart'), 'forgot a refused restart')
-        self.assertIn('HTTP 500', self.ha.notifications('restart')[0]['message'])
+        message = self.ha.notifications('restart')[0]['message']
+        self.assertIn('HTTP 503', message)
+        self.assertIn('response was interrupted', message)
+        self.ha.truncated_error_path = None
         self.ha.stop()
         self.assertEqual(self.hook(refused).returncode, 0)
         self.assertTrue(self.recorded('restart'), 'lost a refused restart during an API outage')
@@ -340,6 +346,16 @@ class SidecarTest(unittest.TestCase):
         community.chmod(0o755)
         self.assertEqual(self.hook(halfway).returncode, 0)
         self.assertEqual(len(self.ha.posts('/restart')), 4, 'lost the restart when the hook failed halfway')
+
+    def test_retries_notification_after_interrupted_error_response(self):
+        self.ha.start()
+        stray = self.deploy({'configuration.yaml': 'v1'})
+        self.ha.truncated_error_path = '/api/services/persistent_notification/create'
+        self.assertNotEqual(self.hook(stray).returncode, 0)
+        self.assertEqual(self.ha.notifications('deploy'), [])
+        self.ha.truncated_error_path = None
+        self.assertEqual(self.hook(stray).returncode, 0)
+        self.assertEqual(len(self.ha.notifications('deploy')), 1)
 
     def test_retries_notifications_without_repeating_the_deploy(self):
         self.ha.start()
