@@ -252,7 +252,8 @@ class SidecarTest(unittest.TestCase):
         self.assertEqual(self.ha.notifications(), [], 'notified about a deploy that worked')
 
         stray = self.deploy({'configuration.yaml': 'stray\n'})
-        wait(lambda: self.recorded('reloaded') == stray, 'stray commit handled')
+        wait(lambda: self.ha.notifications(), 'stray commit notification')
+        self.assertEqual(self.recorded('reloaded'), stray)
         self.assertTrue(self.ha.notifications('deploy'))
         self.assertEqual(len(self.ha.posts('/reload_all')), 2, 'reloaded a commit CI did not build')
         self.assertTrue(self.ready(name), 'a stray commit kept Home Assistant from starting')
@@ -260,11 +261,13 @@ class SidecarTest(unittest.TestCase):
         self.ha.status = 500
         fourth = self.deploy({'configuration.yaml': 'v4\n'}, source='d' * 40)
         wait(lambda: self.recorded('reloaded') == fourth, 'failed reload recorded')
+        wait(lambda: self.ha.notifications('reload'), 'failed reload notification')
         failed = self.ha.notifications('reload')
         self.assertTrue(failed and 'HTTP 500' in failed[0]['message'] and 'not valid' in failed[0]['message'])
 
         fifth = self.deploy({'configuration.yaml': 'v5\n'}, source='e' * 40, remove=['custom_components/nordpool'])
         wait(lambda: self.recorded('reloaded') == fifth, 'failed restart recorded')
+        wait(lambda: self.ha.notifications('restart'), 'failed restart notification')
         failed = self.ha.notifications('restart')
         self.assertTrue(failed and 'HTTP 500' in failed[0]['message'] and 'not valid' in failed[0]['message'])
         self.assertTrue(self.recorded('restart'), 'forgot the restart after it failed')
