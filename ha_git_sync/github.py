@@ -23,8 +23,8 @@ class GitHub:
         self.git = git
         self.token = token
 
-    def release_asset(self, repository, tag, name):
-        """Download a release asset and check it against the SHA-256 digest GitHub publishes for it."""
+    def release_asset(self, repository, tag, name, sha256=None):
+        """Download a release asset and check it against the pinned SHA-256 and the digest GitHub publishes for it."""
         headers = {'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2026-03-10'}
         if self.token:
             headers['Authorization'] = f'Bearer {self.token}'
@@ -33,11 +33,15 @@ class GitHub:
         if not assets:
             raise Error(f'{repository} {tag} has no release asset {name}')
         digest = assets[0].get('digest') or ''
-        if not digest.startswith('sha256:'):
-            raise Error(f'GitHub publishes no SHA-256 digest for {repository} {tag} {name}; pin a commit instead')
+        if not digest.startswith('sha256:') and sha256 is None:
+            raise Error(f'GitHub publishes no SHA-256 digest for {repository} {tag} {name}; '
+                        'pin its sha256 or a commit instead')
         data = get(assets[0]['browser_download_url'], {})
-        if hashlib.sha256(data).hexdigest() != digest.removeprefix('sha256:'):
+        actual = hashlib.sha256(data).hexdigest()
+        if digest.startswith('sha256:') and actual != digest.removeprefix('sha256:'):
             raise Error(f'{repository} {tag} {name} does not match its published digest')
+        if sha256 is not None and actual != sha256:
+            raise Error(f'{repository} {tag} {name} does not match its pinned sha256 {sha256}')
         return data
 
     @contextmanager

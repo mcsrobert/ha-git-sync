@@ -68,6 +68,18 @@ cards:
     path: dist/weather-chart-card.js
 ```
 
+GitHub publishes a digest only for assets uploaded since mid-2025, and a new upload of an asset gets a new digest. To
+pin the exact file, or an asset without a digest, add its `sha256` before `asset`. `check` then verifies the download
+against it, and against GitHub's digest when there is one:
+
+```yaml
+integrations:
+  - repository: hacs/integration
+    version: 2.0.5
+    sha256: 97be6b824a4f38e683728cc6dd72367f6b8bad0a43428b1b3b987a3087adf413
+    asset: hacs.zip
+```
+
 Load cards from `/local/community/<repository>/<file>`. A changed card needs a browser refresh, not a restart.
 
 ## Setup

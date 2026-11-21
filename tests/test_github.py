@@ -1,3 +1,4 @@
+import hashlib
 import io
 import shutil
 import tempfile
@@ -36,6 +37,23 @@ class ReleaseAssetTest(unittest.TestCase):
         self.server.release('o/r', 'v1', {'r.zip': b'data'}, digests={'r.zip': None})
         with self.assertRaisesRegex(Error, 'no SHA-256 digest'):
             self.github.release_asset('o/r', 'v1', 'r.zip')
+
+    def test_pinned_sha256_replaces_a_missing_digest(self):
+        self.server.release('o/r', 'v1', {'r.zip': b'data'}, digests={'r.zip': None})
+        pinned = hashlib.sha256(b'data').hexdigest()
+        self.assertEqual(self.github.release_asset('o/r', 'v1', 'r.zip', pinned), b'data')
+
+    def test_rejects_pinned_sha256_mismatch(self):
+        for digests in ({}, {'r.zip': None}):
+            with self.subTest(digests=digests):
+                self.server.release('o/r', 'v1', {'r.zip': b'data'}, digests=digests)
+                with self.assertRaisesRegex(Error, 'does not match its pinned sha256'):
+                    self.github.release_asset('o/r', 'v1', 'r.zip', '0' * 64)
+
+    def test_pinned_sha256_still_checks_the_published_digest(self):
+        self.server.release('o/r', 'v1', {'r.zip': b'data'}, digests={'r.zip': 'sha256:' + '0' * 64})
+        with self.assertRaisesRegex(Error, 'does not match its published digest'):
+            self.github.release_asset('o/r', 'v1', 'r.zip', hashlib.sha256(b'data').hexdigest())
 
     def test_rejects_missing_asset_and_release(self):
         self.server.release('o/r', 'v1', {'other.zip': b'data'})

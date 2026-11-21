@@ -88,7 +88,7 @@ def check_rules(files):
 def install(item, root, github):
     folder = None
     if item.asset:
-        data = github.release_asset(item.repository, item.version, item.asset)
+        data = github.release_asset(item.repository, item.version, item.asset, item.sha256)
         files = unzip(data) if item.category == 'integrations' else {item.asset: data}
     else:
         with github.checkout(item.repository, item.version, item.commit) as tree:
