@@ -8,6 +8,29 @@ import threading
 import zipfile
 
 
+VALID_HACS = """
+integrations:
+  - repository: amitfin/retry
+    version: v4.2.0
+    asset: retry.zip
+  - repository: hacs/integration
+    version: 2.0.5
+    sha256: 97be6b824a4f38e683728cc6dd72367f6b8bad0a43428b1b3b987a3087adf413
+    asset: hacs.zip
+  - repository: custom-components/nordpool
+    version: 0.0.18
+    commit: 1eaa2490943bb41a2e322e9349ba2d7c6746a94b
+cards:
+  - repository: RomRider/apexcharts-card
+    version: v2.2.3
+    asset: apexcharts-card.js
+  - repository: mlamberts78/weather-chart-card
+    version: V2.4.11
+    commit: 71be08feeced42427ac69954168ff4ba05990dfc
+    path: dist/weather-chart-card.js
+"""
+
+
 class Server:
     """Serves fixed responses and records the headers of each request."""
 
