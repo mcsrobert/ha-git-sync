@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/mcsrobert/ha-git-sync/compare/v0.1.0...v0.2.0) (2026-11-21)
+
+
+### Features
+
+* **check:** pin release assets by sha256 in hacs.yaml ([5834563](https://github.com/mcsrobert/ha-git-sync/commit/5834563ee2da31c4490fee7de3f266d3e1cba2ce))
+
 ## 0.1.0 (2026-11-21)
 
 
