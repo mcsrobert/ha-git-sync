@@ -29,6 +29,7 @@ class HomeAssistant:
         self.state = 'STARTING'
         self.status = 200
         self.message = 'The configuration is not valid'
+        self.truncate_error = False
         self.restart_closes = True
         self.drop_notifications = False
         self.calls = []
@@ -41,7 +42,8 @@ class HomeAssistant:
                 data = json.dumps(body, ensure_ascii=False).encode()
                 self.send_response(status)
                 self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', str(len(data)))
+                length = len(data) + int(ha.truncate_error and status >= 400)
+                self.send_header('Content-Length', str(length))
                 self.end_headers()
                 self.wfile.write(data)
 
@@ -317,9 +319,11 @@ class SidecarTest(unittest.TestCase):
         self.assertEqual(len(self.ha.posts('/restart')), 2)
 
         self.ha.status = 500
+        self.ha.truncate_error = True
         refused = self.deploy({'custom_components/retry/manifest.json': 'v3'}, source='d' * 40)
         self.assertEqual(self.hook(refused).returncode, 0)
         self.assertTrue(self.recorded('restart'), 'forgot a refused restart')
+        self.assertIn('HTTP 500', self.ha.notifications('restart')[0]['message'])
         self.ha.stop()
         self.assertEqual(self.hook(refused).returncode, 0)
         self.assertTrue(self.recorded('restart'), 'lost a refused restart during an API outage')
