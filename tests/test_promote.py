@@ -74,12 +74,13 @@ class PromoteTest(unittest.TestCase):
         self.assertEqual(self.deployed(), newer)
         self.assertIn('already contains', log)
 
-    def test_unchanged_files_add_no_commit(self):
+    def test_unchanged_files_still_record_the_newest_source(self):
         self.promote({'configuration.yaml': 'a\n'}, self.commits[0])
-        first = self.deployed()
-        log = self.promote({'configuration.yaml': 'a\n'}, self.commits[1])
-        self.assertEqual(self.deployed(), first)
-        self.assertIn('deploys the same files', log)
+        self.promote({'configuration.yaml': 'a\n'}, self.commits[2])
+        newest = self.deployed()
+        self.assertIn(f'Source-Commit: {self.commits[2]}', self.message(newest))
+        self.promote({'configuration.yaml': 'b\n'}, self.commits[1])
+        self.assertEqual(self.deployed(), newest)
 
     def test_replaces_a_branch_ci_did_not_build(self):
         self.promote({'configuration.yaml': 'a\n'}, self.commits[0])

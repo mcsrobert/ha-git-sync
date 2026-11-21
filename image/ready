@@ -1,5 +1,7 @@
 #!/bin/bash
-# Succeeds once the hook has handled the commit git-sync checked out, so Home Assistant can start on it.
-installed=$(cat /config/.git-sync/state/installed 2> /dev/null) &&
-  current=$(readlink /config/.git-sync/current) &&
-  [[ -n $installed && $installed == "${current##*/}" ]]
+# A rejected tip can use the last fully installed, retained configuration.
+cd /config/.git-sync || exit 1
+tip=$(readlink incoming) &&
+  installed=$(head -n 1 state/installed 2> /dev/null) &&
+  [[ -n $installed && $(readlink current) == state/trees/* && -f current/configuration.yaml &&
+    (${tip##*/} == "$installed" || ${tip##*/} == "$(cat state/rejected 2> /dev/null)") ]]
