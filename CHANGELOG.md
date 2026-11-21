@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/mcsrobert/ha-git-sync/compare/v0.2.0...v0.2.1) (2026-11-21)
+
+
+### Bug Fixes
+
+* **check:** report the downloaded asset's hash on a digest mismatch ([631c29a](https://github.com/mcsrobert/ha-git-sync/commit/631c29a7fccd61f44b35e3773c143ed6ce325b14))
+* **renovate:** update quoted sha256 and commit pins in hacs.yaml ([ddde80e](https://github.com/mcsrobert/ha-git-sync/commit/ddde80ec804493d4f1c6f6eb9ce5b8fd55b60d36))
+
 ## [0.2.0](https://github.com/mcsrobert/ha-git-sync/compare/v0.1.0...v0.2.0) (2026-11-21)
 
 
