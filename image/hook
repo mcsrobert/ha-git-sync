@@ -204,12 +204,8 @@ if [[ ! -d $config/www ]]; then
 fi
 own "$config/custom_components"
 own "$config/www/community"
-ha=$(api config)
-# Home Assistant loads integrations only when it starts. Replacing them while it runs needs a restart, and when it is
-# down, it loads the installed ones once it starts.
-if [[ $ha == down ]]; then
-  rm -f "$state/restart"
-elif [[ $(tree custom_components) != "$(cat "$config/custom_components/.git-sync")" ]]; then
+# An unreachable API can belong to a running instance that still has the previous integrations loaded.
+if [[ $(tree custom_components) != "$(cat "$config/custom_components/.git-sync")" ]]; then
   record restart "$built_from"
 fi
 install custom_components "$config/custom_components"
@@ -217,6 +213,7 @@ install www/community "$config/www/community"
 record installed "$commit"
 
 if [[ $(recorded reloaded) != "$commit" ]]; then
+  ha=$(api config)
   answered "$ha"
   if [[ $ha != 200 ]]; then
     echo "Home Assistant answered HTTP $ha; retrying later" >&2
