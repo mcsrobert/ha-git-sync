@@ -13,15 +13,19 @@ fi
 build_token=${GITHUB_TOKEN:-${GH_TOKEN:-$(gh auth token 2> /dev/null || true)}}
 export -n build_token
 unset GITHUB_TOKEN GH_TOKEN
-python_version=$("$root/check/resolve-python.sh" "$version")
 venv=$root/.venv/home-assistant-$version
-if [[ ! -x $venv/bin/python ]]; then
-  uv venv --quiet --python "$python_version" "$venv"
+if [[ ! -f $venv/.ready ]]; then
+  python_version=$("$root/check/resolve-python.sh" "$version")
+  echo "Installing Home Assistant ${version} on Python ${python_version} into ${venv}"
+  if [[ ! -x $venv/bin/python ]]; then
+    uv venv --quiet --python "$python_version" "$venv"
+  fi
+  uv pip install --quiet --python "$venv/bin/python" "homeassistant==${version}"
+  read -ra requirements < <("$venv/bin/python" -P -c \
+    'from homeassistant.scripts.check_config import REQUIREMENTS; print(*REQUIREMENTS)')
+  uv pip install --quiet --python "$venv/bin/python" "${requirements[@]}"
+  : > "$venv/.ready"
 fi
-uv pip install --quiet --python "$venv/bin/python" "homeassistant==${version}"
-read -ra requirements < <("$venv/bin/python" -P -c \
-  'from homeassistant.scripts.check_config import REQUIREMENTS; print(*REQUIREMENTS)')
-uv pip install --quiet --python "$venv/bin/python" "${requirements[@]}"
 
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
