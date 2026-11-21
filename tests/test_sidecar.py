@@ -302,7 +302,16 @@ class SidecarTest(unittest.TestCase):
         self.assertIn('not reachable', self.hook(down).stderr)
         self.assertEqual(self.recorded('installed'), down)
         self.assertTrue(self.recorded('restart'), 'lost the restart while the API was unreachable')
+        self.ha.state = 'STARTING'
         self.ha.start()
+        posts = len(self.ha.posts())
+        starting = self.hook(down)
+        self.assertNotEqual(starting.returncode, 0)
+        self.assertIn('still starting', starting.stderr)
+        self.assertEqual(len(self.ha.posts()), posts)
+        self.assertTrue(self.recorded('restart'))
+
+        self.ha.state = 'RUNNING'
         self.assertEqual(self.hook(down).returncode, 0)
         self.assertEqual(len(self.ha.posts('/reload_all')), 1)
         self.assertEqual(len(self.ha.posts('/restart')), 2)
