@@ -11,14 +11,25 @@ state=$config/.git-sync/state
 ha_url=${HA_URL:-http://localhost:8123}
 token_file=${HA_TOKEN_FILE:-/etc/git-secret/ha-token}
 commit=${GITSYNC_HASH:?}
+editor_files=(automations.yaml scripts.yaml scenes.yaml)
 
 mkdir -p "$state/notifications" "$state/trees"
 
-record() {
-  local key=$1
+die() {
+  echo "$1" >&2
+  exit 1
+}
+
+write_atomic() {
+  local path=$1 name=${1##*/} tmp
+  tmp=${path%/*}/.${name#.}.tmp
   shift
-  printf '%s\n' "$@" > "$state/.$key"
-  mv "$state/.$key" "$state/$key"
+  printf '%s\n' "$@" > "$tmp"
+  mv "$tmp" "$path"
+}
+
+record() {
+  write_atomic "$state/$1" "${@:2}"
 }
 
 recorded() {
@@ -28,18 +39,20 @@ recorded() {
 # Print the HTTP status of a call to Home Assistant's API, or why there is none: down when nothing answers at
 # $ha_url, closed when Home Assistant closed the connection without answering, and failed for other errors.
 api() {
-  local result
+  local result code exitcode
   result=$(curl --silent --show-error --max-time 120 --output "$state/response" \
     --write-out '%{http_code} %{exitcode}' \
     --header @<(printf 'Authorization: Bearer %s\n' "$(< "$token_file")") \
     --header 'Content-Type: application/json' "${@:2}" "$ha_url/api/$1") || true
-  if [[ $1 == services/homeassistant/restart && ${result% *} == [45][0-9][0-9] && ${result#* } != 0 ]]; then
+  code=${result% *}
+  exitcode=${result#* }
+  if [[ $1 == services/homeassistant/restart && $code == [45][0-9][0-9] && $exitcode != 0 ]]; then
     printf '%s' 'The error response was interrupted.' > "$state/response"
-    echo "${result% *}"
+    echo "$code"
     return
   fi
-  case ${result#* } in
-    0) echo "${result% *}" ;;
+  case $exitcode in
+    0) echo "$code" ;;
     6 | 7) echo down ;;
     52 | 56) echo closed ;;
     *) echo failed ;;
@@ -49,14 +62,8 @@ api() {
 # Exit, so git-sync retries the hook later, unless Home Assistant answered and accepted the token.
 answered() {
   case $1 in
-    down | closed | failed)
-      echo "Home Assistant is not reachable at $ha_url ($1); retrying later" >&2
-      exit 1
-      ;;
-    401 | 403)
-      echo "Home Assistant rejected the token (HTTP $1)" >&2
-      exit 1
-      ;;
+    down | closed | failed) die "Home Assistant is not reachable at $ha_url ($1); retrying later" ;;
+    401 | 403) die "Home Assistant rejected the token (HTTP $1)" ;;
   esac
 }
 
@@ -90,9 +97,8 @@ excerpt() {
 
 # Queue a persistent notification. Queued, a failed delivery is retried without repeating what the hook did.
 notify() {
-  printf '{"notification_id": "git_sync_%s", "title": %s, "message": %s}\n' "$1" "$(json "$2")" "$(json "$3")" \
-    > "$state/notifications/.$1"
-  mv "$state/notifications/.$1" "$state/notifications/$1"
+  write_atomic "$state/notifications/$1" \
+    "{\"notification_id\": \"git_sync_$1\", \"title\": $(json "$2"), \"message\": $(json "$3")}"
 }
 
 send_notifications() {
@@ -119,10 +125,7 @@ aside() {
   if [[ -e $backup || -L $backup ]]; then
     backup=$1.pre-git.$(date +%Y%m%d%H%M%S)
   fi
-  if ! mv "$1" "$backup"; then
-    echo "Cannot move $1 aside; give this container write access to ${1%/*}, or move it yourself" >&2
-    exit 1
-  fi
+  mv "$1" "$backup" || die "Cannot move $1 aside; give this container write access to ${1%/*}, or move it yourself"
   echo "Moved $1 to $backup"
 }
 
@@ -150,42 +153,37 @@ link() {
   done
 }
 
-# Make $1 a folder only this hook writes; its .git-sync marker records what it installed.
-own() {
-  if [[ -f $1/.git-sync ]]; then
-    return
-  fi
-  if [[ -e $1 || -L $1 ]]; then
-    if [[ $1 == "$config/custom_components" ]]; then
-      local component
-      for component in "$1"/*/; do
-        [[ -d $component ]] && record restart "$commit" && break
-      done
-    fi
-    aside "$1"
-  fi
-  mkdir "$1"
-  : > "$1/.git-sync"
-}
-
 # The hash of the tree $1 in this commit, or nothing when the commit does not have it.
 tree() {
   git rev-parse --verify --quiet "$commit:$1" || true
 }
 
-# Replace everything in $config/$1 with the folders of $1 if its marker does not match $2.
+# Take ownership of $config/$1 and replace it with the folders of $1 if its marker does not match $2.
 install() {
-  local source=$1 target=$config/$1 want=$2 have entry name
-  have=$(cat "$target/.git-sync")
-  if [[ $want == "$have" ]]; then
+  local source=$1 target=$config/$1 want=$2 entry name
+  if [[ ! -f $target/.git-sync ]]; then
+    if [[ -e $target || -L $target ]]; then
+      if [[ $source == custom_components ]]; then
+        for entry in "$target"/*/; do
+          if [[ -d $entry ]]; then
+            record restart "$commit"
+            break
+          fi
+        done
+      fi
+      aside "$target"
+    fi
+    mkdir "$target"
+    : > "$target/.git-sync"
+  fi
+  if [[ $want == "$(cat "$target/.git-sync")" ]]; then
     return
   fi
   if [[ $source == custom_components ]]; then
     record restart "$commit"
     rm -f "$state/reloaded"
   fi
-  printf 'installing\n' > "$target/.git-sync.new"
-  mv "$target/.git-sync.new" "$target/.git-sync"
+  write_atomic "$target/.git-sync" installing
   for entry in "$target"/* "$target"/.[!.]*; do
     name=${entry##*/}
     if [[ -e $entry && $name != .git-sync && ($name == .* || ! -d $source/$name) ]]; then
@@ -197,109 +195,66 @@ install() {
     name=${entry%/}
     name=${name##*/}
     cp -R "$source/$name" "$target/.$name.new"
-    if [[ -e $target/$name ]]; then
-      mv "$target/$name" "$target/.$name.old"
-    fi
+    [[ -e $target/$name ]] && mv "$target/$name" "$target/.$name.old"
     mv "$target/.$name.new" "$target/$name"
     rm -rf "$target/.$name.old"
   done
-  printf '%s\n' "$want" > "$target/.git-sync.new"
-  mv "$target/.git-sync.new" "$target/.git-sync"
+  write_atomic "$target/.git-sync" "$want"
   echo "Installed $source from ${commit:0:7}"
 }
 
-built_from=$(git log -1 --format='%(trailers:key=Source-Commit,valueonly)' "$commit" | head -n 1)
-if [[ -z $built_from ]]; then
-  echo "${commit:0:7} has no Source-Commit trailer, so CI did not build it; not installing or reloading"
-  if [[ $(recorded rejected) != "$commit" ]]; then
-    notify deploy "Configuration not deployed" "The deployed branch is at ${commit:0:7}, which CI did not \
-build, so nothing was installed or reloaded. The next CI run on the main branch restores it."
-    record rejected "$commit"
+# Install integrations and cards, retain one snapshot of the tree, and point current at it.
+publish() {
+  local commit=$1 content=$2 components=$3 cards=$4 snapshot name old
+  if [[ $(readlink "$config/configuration.yaml" || true) != "$current/configuration.yaml" ]]; then
+    for name in "${editor_files[@]}"; do
+      if [[ -f $config/$name && ! -L $config/$name ]]; then
+        aside "$config/$name"
+      fi
+    done
   fi
-  # An interrupted install can have changed live files. Restore the retained tree, even after git-sync prunes it.
-  previous=()
-  if [[ ! -f $state/installed && -f $state/previous ]]; then
-    mapfile -t previous < "$state/previous"
+  if [[ -f $state/installed && $(head -n 1 "$state/installed") != "$commit" ]]; then
+    mv "$state/installed" "$state/previous"
   fi
-  if ((${#previous[@]} != 4)); then
-    send_notifications
-    exit 0
-  fi
-  commit=${previous[0]}
-  content=${previous[1]}
-  components=${previous[2]}
-  cards=${previous[3]}
-  cd "$state/trees/$content"
-else
-  content=$(git rev-parse "$commit^{tree}")
-  components=$(tree custom_components)
-  cards=$(tree www/community)
-  rm -f "$state/rejected"
-fi
+  [[ -d $config/www ]] || mkdir -m 2775 "$config/www"
+  install custom_components "$components"
+  install www/community "$cards"
 
-if [[ $(readlink "$config/configuration.yaml" || true) != "$current/configuration.yaml" ]]; then
-  for name in automations.yaml scripts.yaml scenes.yaml; do
-    if [[ -f $config/$name && ! -L $config/$name ]]; then
-      aside "$config/$name"
-    fi
+  snapshot=$state/trees/$content
+  if [[ ! -d $snapshot ]]; then
+    rm -rf "$state/staging"
+    mkdir "$state/staging"
+    (
+      GLOBIGNORE=.git
+      cp -a --reflink=auto -- * "$state/staging/"
+    )
+    mv "$state/staging" "$snapshot"
+  fi
+  if [[ $(readlink "$config/$current" || true) != "state/trees/$content" ]]; then
+    rm -f "$state/reloaded" "$state/applied"
+  fi
+  link
+  ln -sfnT "state/trees/$content" "$state/.current"
+  mv -Tf "$state/.current" "$config/$current"
+  record installed "$commit" "$content" "$components" "$cards"
+  rm -f "$state/previous"
+  for old in "$state/trees"/*; do
+    [[ $old == "$snapshot" ]] || rm -rf "$old"
   done
-fi
-if [[ -f $state/installed && $(head -n 1 "$state/installed") != "$commit" ]]; then
-  mv "$state/installed" "$state/previous"
-fi
-if [[ ! -d $config/www ]]; then
-  mkdir -m 2775 "$config/www"
-fi
-own "$config/custom_components"
-own "$config/www/community"
-install custom_components "$components"
-install www/community "$cards"
+}
 
-snapshot=$state/trees/$content
-if [[ ! -d $snapshot ]]; then
-  rm -rf "$state/staging"
-  mkdir "$state/staging"
-  (
-    GLOBIGNORE=.git
-    cp -a --reflink=auto -- * "$state/staging/"
-  )
-  mv "$state/staging" "$snapshot"
-fi
-if [[ $(readlink "$config/$current" || true) != "state/trees/$content" ]]; then
-  rm -f "$state/reloaded" "$state/applied"
-fi
-link
-ln -sfnT "state/trees/$content" "$state/.current"
-mv -Tf "$state/.current" "$config/$current"
-record installed "$commit" "$content" "$components" "$cards"
-rm -f "$state/previous"
-for old in "$state/trees"/*; do
-  [[ $old == "$snapshot" ]] || rm -rf "$old"
-done
-
-if [[ -z $built_from ]]; then
-  send_notifications
-  exit 0
-fi
-
-if [[ $(recorded reloaded) != "$commit" && (-s $state/restart || $(recorded applied) != "$content") ]]; then
+# Reload Home Assistant, or restart it when integrations changed, once it is running.
+apply() {
+  local ha status
   ha=$(api config)
   answered "$ha"
-  if [[ $ha != 200 ]]; then
-    echo "Home Assistant answered HTTP $ha; retrying later" >&2
-    exit 1
-  fi
-  if ! grep -q '"state": *"RUNNING"' "$state/response"; then
-    echo "Home Assistant is still starting; retrying later" >&2
-    exit 1
-  fi
+  [[ $ha == 200 ]] || die "Home Assistant answered HTTP $ha; retrying later"
+  grep -q '"state": *"RUNNING"' "$state/response" || die "Home Assistant is still starting; retrying later"
   rm -f "$state/applied"
   if [[ -s $state/restart ]]; then
     status=$(api services/homeassistant/restart --data '{}')
     # Home Assistant may stop before it answers.
-    if [[ $status == closed ]]; then
-      status=200
-    fi
+    [[ $status == closed ]] && status=200
     answered "$status"
     if [[ $status == 200 ]]; then
       echo "Restarting Home Assistant with ${built_from:0:7}, because integrations changed"
@@ -323,11 +278,38 @@ changed, restart Home Assistant yourself."$'\n\n'"$(excerpt)"
   if [[ $status == 200 ]]; then
     record applied "$content"
   fi
+}
+
+built_from=$(git log -1 --format='%(trailers:key=Source-Commit,valueonly)' "$commit" | head -n 1)
+if [[ -z $built_from ]]; then
+  echo "${commit:0:7} has no Source-Commit trailer, so CI did not build it; not installing or reloading"
+  if [[ $(recorded rejected) != "$commit" ]]; then
+    notify deploy "Configuration not deployed" "The deployed branch is at ${commit:0:7}, which CI did not \
+build, so nothing was installed or reloaded. The next CI run on the main branch restores it."
+    record rejected "$commit"
+  fi
+  # An interrupted install can have changed live files. Restore the retained tree, even after git-sync prunes it.
+  if [[ ! -f $state/installed && -f $state/previous ]]; then
+    mapfile -t previous < "$state/previous"
+    if ((${#previous[@]} == 4)); then
+      (cd "$state/trees/${previous[1]}" && publish "${previous[@]}")
+    fi
+  fi
+  send_notifications
+  exit 0
+fi
+
+rm -f "$state/rejected"
+content=$(git rev-parse "$commit^{tree}")
+publish "$commit" "$content" "$(tree custom_components)" "$(tree www/community)"
+
+if [[ $(recorded reloaded) != "$commit" && (-s $state/restart || $(recorded applied) != "$content") ]]; then
+  apply
 fi
 record reloaded "$commit"
 
 orphans=()
-for name in automations.yaml scripts.yaml scenes.yaml; do
+for name in "${editor_files[@]}"; do
   if [[ -f $config/$name && ! -L $config/$name ]]; then
     orphans+=("$name")
   fi
