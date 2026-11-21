@@ -32,6 +32,7 @@ class HomeAssistant:
         self.truncated_error_path = None
         self.restart_closes = True
         self.drop_notifications = False
+        self.notification_status = 200
         self.calls = []
         self.notes = []
         self.httpd = None
@@ -69,6 +70,8 @@ class HomeAssistant:
                     if ha.drop_notifications:
                         self.close_connection = True
                         return
+                    if ha.notification_status != 200:
+                        return self.respond(ha.notification_status, {})
                     ha.notes.append(data)
                 if self.path.endswith(('/reload_all', '/restart')) and ha.status != 200:
                     return self.respond(ha.status, {'message': ha.message})
@@ -372,6 +375,12 @@ class SidecarTest(unittest.TestCase):
             self.assertIn('not reachable', result.stderr)
         self.assertEqual(len(self.ha.posts('/restart')), 1, 'repeated the restart to retry a notification')
         self.ha.drop_notifications = False
+        for status in (429, 503):
+            self.ha.notification_status = status
+            self.assertNotEqual(self.hook(refused).returncode, 0)
+            self.assertEqual(self.ha.notifications('restart'), [])
+        self.assertEqual(len(self.ha.posts('/restart')), 1)
+        self.ha.notification_status = 200
         self.assertEqual(self.hook(refused).returncode, 0)
         self.assertIn('HTTP 502', self.ha.notifications('restart')[0]['message'])
 
