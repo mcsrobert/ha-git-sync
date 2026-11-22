@@ -2,6 +2,12 @@
 
 ha-git-sync deploys a Home Assistant configuration from Git. [README.md](./README.md) explains how people use it.
 
+## Scope
+
+The sidecar has one job: put the tree `promote` built into `/config`, reload or restart Home Assistant, and report what
+failed. Keep it that simple. Weigh every new feature or edge case against that job, and prefer removing a case to
+handling it. Checks belong in the `check` action, before anything reaches the sidecar.
+
 ## Layout
 
 ```text
@@ -20,7 +26,8 @@ tests/              Unit tests, and test_sidecar.py, which runs the image in Doc
 The actions and the image change together, so keep them consistent in one change:
 
 - `promote` writes the `deployed` branch; the image follows it (`GITSYNC_REF`).
-- Each deploy commit carries a `Source-Commit:` trailer. The hook only installs and reloads commits with one.
+- Each deploy commit carries a `Source-Commit:` trailer. The hook only installs and reloads commits with one. Keep this
+  check: it stands in for branch protection, which GitHub Free does not offer private repositories.
 - The deploy tree is the repository without `.github`, plus `custom_components/` and `www/community/`.
 - `ha_git_sync/check.py` `layout()` mirrors how the hook links the checkout into `/config`. `test_sidecar.py`
   compares the two.

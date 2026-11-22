@@ -37,6 +37,11 @@ did not make. It does not install or reload such a commit, and the next run on `
 restart stays due, so the next deploy restarts instead of reloading. Home Assistant checks the configuration with the
 integrations it runs, so when a configuration change needs the new ones, restart Home Assistant yourself.
 
+The trailer check stands in for branch protection, which GitHub Free does not offer private repositories: with it, a
+stray push or a hand-made commit on `deployed` never reaches Home Assistant. It guards against mistakes, not against
+people who can write to the repository, since they can copy a trailer. Treat write access to the repository as access
+to Home Assistant.
+
 ## Your repository
 
 Lay it out the way Home Assistant expects `/config`, with `configuration.yaml` at the root, so includes such as
