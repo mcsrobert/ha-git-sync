@@ -11,14 +11,16 @@ handling it. Checks belong in the `check` action, before anything reaches the si
 ## Layout
 
 ```text
-Dockerfile          The image: git-sync plus the files in image/, with git-sync defaults set through ENV
-image/hook          git-sync's exechook: links the checkout into /config, installs, reloads or restarts, notifies
-image/ready         Startup probe and Docker health check
+Dockerfile          The image: Python, git, ssh and the git-sync binary, with git-sync defaults set through ENV
+image/hook          git-sync's exechook; runs the sidecar in ha_git_sync/sidecar.py
+image/ready         Startup probe and Docker health check; runs ha_git_sync/sidecar.py's ready()
 check/action.yaml   Composite action: gitleaks, build the deploy tree, check_config, upload it
 promote/action.yaml Composite action: download the deploy tree and run promote.sh
-ha_git_sync/        Python used by the check action: build (hacs.yaml downloads) and check (check_config)
+ha_git_sync/        Python: build (hacs.yaml downloads) and check (check_config) for the check action, sidecar (link
+                    into /config, reload or restart, notify) for the image, and layout, which both share
 default.json        Renovate preset for configuration repositories
-tests/              Unit tests, and test_sidecar.py, which runs the image in Docker
+tests/              Unit tests, test_hook.py, which runs the sidecar in-process, and test_sidecar.py, which runs the
+                    image in Docker
 ```
 
 ## The contract
@@ -29,8 +31,10 @@ The actions and the image change together, so keep them consistent in one change
 - Each deploy commit carries a `Source-Commit:` trailer. The hook only installs and reloads commits with one. Keep this
   check: it stands in for branch protection, which GitHub Free does not offer private repositories.
 - The deploy tree is the repository without `.github`, plus `custom_components/` and `www/community/`.
-- `ha_git_sync/check.py` `layout()` mirrors how the hook links the checkout into `/config`. `test_sidecar.py`
-  compares the two.
+- `ha_git_sync/layout.py` decides how a deploy tree appears in `/config`: `check` lays it out with `layout()` and the
+  sidecar links what `linked()` returns. `test_sidecar.py` compares the two.
+- The image has only the standard library: `sidecar.py` and the modules it imports must not import PyYAML or other
+  packages, and the Dockerfile copies exactly those modules.
 
 The image is public and used by others: keep its settings few, and treat a change to a default, a path or the hook's
 behavior as a breaking change.

@@ -10,10 +10,9 @@ import tempfile
 from . import sources
 from .errors import Error
 from .github import unzip
+from .layout import EDITOR_FILES, INSTALLED
 
 EXCLUDED = ('.github',)
-INSTALLED = ('custom_components', 'www/community')
-EDITOR_FILES = ('automations.yaml', 'scripts.yaml', 'scenes.yaml')
 BLUEPRINT_DOMAINS = ('automation', 'script', 'template')
 DOMAIN = re.compile(r'[a-z0-9_]+')
 
