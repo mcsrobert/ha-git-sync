@@ -23,9 +23,9 @@ main ─────────> check ─> promote ─> deployed ─> sidecar 
 | --- | --- | --- |
 | `main` | you | Your configuration and `hacs.yaml`. No `secrets.yaml`, and no downloaded integrations or cards. |
 | `deployed` | `promote` | `main` without `.github/`, plus `custom_components/<domain>/` and `www/community/<repository>/` from `hacs.yaml`. Each commit names its `main` commit in a `Source-Commit:` trailer. |
-| `/config/.git-sync/` | sidecar | git-sync's clone and `incoming` checkout, plus the hook's state and `current` link to the last accepted tree. |
-| `/config/<name>` | sidecar | A link to `.git-sync/current/<name>` for each top-level file and folder in `deployed`, except hidden ones, `custom_components` and `www`. |
-| `/config/custom_components/`<br>`/config/www/community/` | sidecar | Copies from `deployed`, replaced whenever they change. |
+| `/config/.git-sync/` | sidecar | git-sync's clone and `incoming` checkout, plus the hook's state and `current` link to the last accepted tree. When the sidecar runs as another user than Home Assistant, files Home Assistant wrote into integrations that were replaced, such as `__pycache__`, stay in `state/trash`; delete them when you like. |
+| `/config/<name>` | sidecar | A link to `.git-sync/current/<name>` for each top-level file and folder in `deployed`, except hidden ones and `www`. `custom_components` is always linked, even when you have no integrations. |
+| `/config/www/community/` | sidecar | Copies of the cards in `deployed`, replaced whenever they change. Home Assistant does not serve files through a link that leaves `www/`. |
 | `/config/<name>.pre-git` | sidecar | Anything the sidecar replaced: a file or folder where a link goes, a `custom_components/` or `www/community/` it did not create, such as HACS's, and on the first deploy `automations.yaml`, `scripts.yaml` and `scenes.yaml`. |
 
 The rest of `/config` stays Home Assistant's: `secrets.yaml`, `.storage/`, the database, logs and the rest of `www/`.

@@ -1,128 +1,19 @@
-"""Run the image against a local repository and a fake Home Assistant. Needs Docker and HA_GIT_SYNC_IMAGE."""
-import http.server
-import json
+"""Run the image against a local repository and a fake Home Assistant. Needs Docker and HA_GIT_SYNC_IMAGE.
+
+test_hook.py covers the hook's behaviour in-process; these tests cover what only the image shows: git-sync running
+the hook, the readiness probe, the health check and a restart of the sidecar.
+"""
 import os
-from pathlib import Path
-import shutil
 import subprocess
-import sys
-import tempfile
-import threading
 import time
 import unittest
 import uuid
 
-from ha_git_sync.check import layout
+from ha_git_sync.layout import layout
 
-from helpers import git
+from helpers import TOKEN, DeployTest, wait
 
 IMAGE = os.environ.get('HA_GIT_SYNC_IMAGE')
-TOKEN = 'secret-token'
-
-
-class HomeAssistant:
-    """Answers the API calls the hook makes and records them. Until start(), nothing listens on its port, as when
-    Home Assistant is down."""
-
-    def __init__(self):
-        self.state = 'STARTING'
-        self.status = 200
-        self.message = 'The configuration is not valid'
-        self.truncated_error_path = None
-        self.restart_closes = True
-        self.drop_notifications = False
-        self.notification_status = 200
-        self.calls = []
-        self.notes = []
-        self.running = False
-        ha = self
-
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def respond(self, status, body):
-                data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
-                self.send_response(status)
-                self.send_header('Content-Type', 'application/json')
-                self.send_header('Content-Length', str(len(data)))
-                if self.path == ha.truncated_error_path:
-                    data = data[:data.index('é'.encode()) + 1]
-                self.end_headers()
-                self.wfile.write(data)
-
-            def do_GET(self):
-                ha.calls.append(('GET', self.path, self.headers.get('Authorization'), None))
-                if self.headers.get('Authorization') != f'Bearer {TOKEN}':
-                    return self.respond(401, {'message': 'unauthorized'})
-                self.respond(200, {'state': ha.state, 'version': '2026.10.4'})
-
-            def do_POST(self):
-                body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
-                ha.calls.append(('POST', self.path, self.headers.get('Authorization'), body))
-                if self.headers.get('Authorization') != f'Bearer {TOKEN}':
-                    return self.respond(401, {'message': 'unauthorized'})
-                try:
-                    data = json.loads(body.decode())
-                except ValueError:
-                    return self.respond(400, {'message': 'Data should be valid JSON.'})
-                if self.path == ha.truncated_error_path:
-                    return self.respond(503, {'message': 'échec'})
-                if self.path.endswith('/persistent_notification/create'):
-                    if ha.drop_notifications:
-                        self.close_connection = True
-                        return
-                    if ha.notification_status != 200:
-                        return self.respond(ha.notification_status, {})
-                    ha.notes.append(data)
-                if self.path.endswith(('/reload_all', '/restart')) and ha.status != 200:
-                    body = ha.message if isinstance(ha.message, bytes) else {'message': ha.message}
-                    return self.respond(ha.status, body)
-                if self.path.endswith('/restart') and ha.restart_closes:
-                    self.close_connection = True
-                    return
-                self.respond(200, [])
-
-            def log_message(self, *args):
-                pass
-
-        self.handler = Handler
-        self.reserve_port()
-
-    def reserve_port(self):
-        # Docker Desktop forwards host.docker.internal to the host's loopback; on Linux it is the bridge gateway.
-        address = '127.0.0.1' if sys.platform == 'darwin' else '0.0.0.0'
-        self.httpd = http.server.ThreadingHTTPServer((address, 0), self.handler, bind_and_activate=False)
-        self.httpd.server_bind()
-        self.port = self.httpd.server_port
-        self.url = f'http://host.docker.internal:{self.port}'
-
-    def start(self):
-        self.httpd.server_activate()
-        self.running = True
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-
-    def stop(self):
-        self.close()
-        self.reserve_port()
-
-    def close(self):
-        if self.running:
-            self.httpd.shutdown()
-            self.running = False
-        self.httpd.server_close()
-
-    def posts(self, suffix=''):
-        return [call for call in self.calls if call[0] == 'POST' and call[1].endswith(suffix)]
-
-    def notifications(self, name=None):
-        return [note for note in self.notes if name is None or note['notification_id'] == f'git_sync_{name}']
-
-
-def wait(condition, what, timeout=60):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if condition():
-            return
-        time.sleep(0.2)
-    raise AssertionError(f'timed out waiting for {what}')
 
 
 def docker(*args, check=True):
@@ -130,25 +21,14 @@ def docker(*args, check=True):
 
 
 @unittest.skipUnless(IMAGE, 'set HA_GIT_SYNC_IMAGE to the image to test')
-class SidecarTest(unittest.TestCase):
+class SidecarTest(DeployTest):
+    DOCKER = True
+
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        self.config = self.tmp / 'config'
-        self.config.mkdir()
-        self.remote = self.tmp / 'remote.git'
-        self.work = self.tmp / 'work'
-        secret = self.tmp / 'secret'
-        secret.mkdir()
-        (secret / 'ha-token').write_text(f'{TOKEN}\n')
-        (secret / 'bad-token').write_text('wrong\n')
-        git(self.tmp, 'init', '-q', '--bare', '-b', 'main', str(self.remote))
-        git(self.tmp, 'clone', '-q', str(self.remote), str(self.work))
-        self.ha = HomeAssistant()
-        self.addCleanup(self.ha.close)
+        super().setUp()
         self.mounts = ['--user', f'{os.getuid()}:{os.getgid()}', '--add-host', 'host.docker.internal:host-gateway',
                        '-v', f'{self.config}:/config', '-v', f'{self.remote}:/remote.git:ro',
-                       '-v', f'{secret}:/etc/git-secret:ro']
+                       '-v', f'{self.secret}:/etc/git-secret:ro']
 
     def start(self):
         name = f'ha-git-sync-test-{uuid.uuid4().hex[:8]}'
@@ -168,38 +48,19 @@ class SidecarTest(unittest.TestCase):
     def ready(self, name):
         return docker('exec', name, '/ha-git-sync/ready', check=False).returncode == 0
 
+    def wait_ready(self, name, what, timeout=60):
+        try:
+            wait(lambda: self.ready(name), what, timeout)
+        except AssertionError as error:
+            logs = docker('logs', name, check=False)
+            raise AssertionError(f'{error}\n{(logs.stdout + logs.stderr)[-4000:]}') from None
+
     def hook(self, commit, token='ha-token'):
         """Run the hook once in a clone of the deployed branch, as git-sync would after a sync."""
         return docker('run', '--rm', '--cap-drop=DAC_OVERRIDE', *self.mounts, '-v', f'{self.work}:/work:ro', '-w', '/work',
                       '-e', f'HA_URL={self.ha.url}',
                       '-e', f'GITSYNC_HASH={commit}', '-e', f'HA_TOKEN_FILE=/etc/git-secret/{token}',
                       '--entrypoint', '/ha-git-sync/hook', IMAGE, check=False)
-
-    def deploy(self, files, source=None, remove=()):
-        for name, text in files.items():
-            (self.work / name).parent.mkdir(parents=True, exist_ok=True)
-            (self.work / name).write_text(text)
-        for name in remove:
-            shutil.rmtree(self.work / name) if (self.work / name).is_dir() else (self.work / name).unlink()
-        git(self.work, 'add', '-A')
-        message = ['-m', 'Deploy']
-        if source:
-            message += ['-m', f'Source-Commit: {source}']
-        git(self.work, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty',
-            *message)
-        git(self.work, 'push', '-q', 'origin', 'HEAD:refs/heads/deployed')
-        return git(self.work, 'rev-parse', 'HEAD')
-
-    def links(self):
-        return {path.name: str(path.readlink()) for path in self.config.iterdir() if path.is_symlink()}
-
-    def hacs_era_config(self):
-        for name, text in {'configuration.yaml': 'old\n', 'automations.yaml': '[]\n', 'scripts.yaml': '{}\n',
-                           'scenes.yaml': '[]\n', 'blueprints/automation/old.yaml': 'x', 'pyscript/old.py': '',
-                           'custom_components/hacs/manifest.json': '{}', 'www/community/oldcard/x.js': '',
-                           'www/local.png': '', '.storage/core.config': '{}'}.items():
-            (self.config / name).parent.mkdir(parents=True, exist_ok=True)
-            (self.config / name).write_text(text)
 
     def test_deploys_migrates_and_reloads(self):
         self.hacs_era_config()
@@ -213,9 +74,10 @@ class SidecarTest(unittest.TestCase):
                              'custom_components/retry/sub/x.py': '1', 'custom_components/nordpool/manifest.json': 'np',
                              'www/community/card\n/name.js': 'newline',
                              'www/community/card/card.js': 'card v1'}, source='a' * 40)
-        wait(lambda: self.ready(name), 'ready after the first install')
+        self.wait_ready(name, 'ready after the first install')
         self.assertEqual(self.links(), {entry: f'.git-sync/current/{entry}' for entry in
-                                        ('README.md', 'automations', 'blueprints', 'configuration.yaml', 'pyscript')})
+                                        ('README.md', 'automations', 'blueprints', 'configuration.yaml',
+                                         'custom_components', 'pyscript')})
         self.assertEqual((self.config / 'configuration.yaml').read_text(), 'v1\n')
         self.assertEqual((self.config / 'pyscript' / 'app.py').read_text(), 'app')
         self.assertEqual((self.config / 'configuration.yaml.pre-git').read_text(), 'old\n')
@@ -295,208 +157,27 @@ class SidecarTest(unittest.TestCase):
         status = docker('inspect', '--format', '{{.State.Health.Status}}', name).stdout.strip()
         self.assertEqual(status, 'healthy')
 
-    def test_first_valid_deploy_migrates_after_a_rejected_tip(self):
-        self.hacs_era_config()
-        self.ha.start()
-        self.ha.state = 'RUNNING'
-        stray = self.deploy({'configuration.yaml': 'stray\n'})
-        self.assertEqual(self.hook(stray).returncode, 0)
-        self.assertEqual((self.config / 'configuration.yaml').read_text(), 'old\n')
+    def test_cannot_become_root(self):
+        result = docker('run', '--rm', '--user', '0:0', '--entrypoint', 'find', IMAGE, '/', '-xdev', '-type', 'f',
+                        '(', '-perm', '-4000', '-o', '-perm', '-2000', ')')
+        self.assertEqual(result.stdout, '', '/etc/passwd is writable, so a setuid program lets the sidecar user '
+                                            'become root')
 
-        first = self.deploy({'configuration.yaml': 'valid\n'}, source='a' * 40)
-        self.assertEqual(self.hook(first).returncode, 0)
-        self.assertTrue((self.config / 'automations.yaml.pre-git').is_file())
-        self.assertTrue((self.config / 'custom_components.pre-git/hacs').is_dir())
-        self.assertEqual(len(self.ha.posts('/restart')), 1)
-
-        same_tree = self.deploy({}, source='b' * 40)
-        self.assertEqual(self.hook(same_tree).returncode, 0)
-        self.assertEqual(len(self.ha.posts()), 2)  # The rejection notification and the migration restart.
-
-    def test_rollback_repairs_an_interrupted_integration_install(self):
-        self.ha.start()
-        self.ha.state = 'RUNNING'
-        path = 'custom_components/demo/version'
-        original = self.deploy({'configuration.yaml': 'v1', path: 'old',
-                                'custom_components/obsolete/version': 'old'}, source='a' * 40)
-        self.assertEqual(self.hook(original).returncode, 0)
-
-        update = self.deploy({path: 'new'}, remove=['custom_components/obsolete'], source='b' * 40)
-        unreadable = self.work / path
-        unreadable.chmod(0)
-        try:
-            self.assertNotEqual(self.hook(update).returncode, 0)
-        finally:
-            unreadable.chmod(0o644)
-        self.assertFalse((self.config / 'custom_components/obsolete').exists())
-        stray = self.deploy({'configuration.yaml': 'stray'})
-        self.assertEqual(self.hook(stray).returncode, 0)
-        self.assertEqual((self.config / 'configuration.yaml').read_text(), 'v1')
-        self.assertEqual((self.config / 'custom_components/obsolete/version').read_text(), 'old')
-        git(self.work, 'checkout', '-q', original)
-        self.assertEqual(self.hook(original).returncode, 0)
-        self.assertEqual((self.config / 'custom_components/obsolete/version').read_text(), 'old')
-        self.assertEqual(len(self.ha.posts('/restart')), 2)
-
-    def test_rollback_after_startup_reloads_the_restored_configuration(self):
-        self.ha.start()
-        self.ha.state = 'RUNNING'
-        original = self.deploy({'configuration.yaml': 'v1'}, source='a' * 40)
-        self.assertEqual(self.hook(original).returncode, 0)
-        self.ha.state = 'STARTING'
-        update = self.deploy({'configuration.yaml': 'v2'}, source='b' * 40)
-        self.assertNotEqual(self.hook(update).returncode, 0)
-        self.assertEqual((self.config / 'configuration.yaml').read_text(), 'v2')
-        self.ha.state = 'RUNNING'
-        git(self.work, 'checkout', '-q', original)
-        self.assertEqual(self.hook(original).returncode, 0)
-        self.assertEqual(len(self.ha.posts('/reload_all')), 2)
-
-    def test_preserves_required_restarts_across_outages_and_install_failures(self):
-        self.ha.start()
-        self.ha.state = 'RUNNING'
-        plain = self.deploy({'configuration.yaml': 'v1\n'}, source='a' * 40)
-        self.assertEqual(self.hook(plain).returncode, 0)
-        self.assertEqual(len(self.ha.posts('/reload_all')), 1)
-
-        first = self.deploy({'custom_components/retry/manifest.json': 'v1'}, source='b' * 40)
-        self.assertEqual(self.hook(first).returncode, 0)
-        self.assertEqual(len(self.ha.posts('/restart')), 1, 'adding the first integration did not restart')
-
-        self.ha.stop()
-        down = self.deploy({'custom_components/retry/manifest.json': 'v2'}, source='c' * 40)
-        self.assertIn('not reachable', self.hook(down).stderr)
-        self.assertEqual((self.config / 'custom_components' / 'retry' / 'manifest.json').read_text(), 'v2')
-        self.ha.state = 'STARTING'
-        self.ha.start()
-        posts = len(self.ha.posts())
-        starting = self.hook(down)
-        self.assertNotEqual(starting.returncode, 0)
-        self.assertIn('still starting', starting.stderr)
-        self.assertEqual(len(self.ha.posts()), posts)
-
-        self.ha.state = 'RUNNING'
-        self.assertEqual(self.hook(down).returncode, 0)
-        self.assertEqual(len(self.ha.posts('/reload_all')), 1)
-        self.assertEqual(len(self.ha.posts('/restart')), 2, 'lost the restart while the API was unreachable')
-
-        self.ha.status = 500
-        self.ha.truncated_error_path = '/api/services/homeassistant/restart'
-        refused = self.deploy({'custom_components/retry/manifest.json': 'v3'}, source='d' * 40)
-        self.assertEqual(self.hook(refused).returncode, 0)
-        message = self.ha.notifications('restart')[0]['message']
-        self.assertIn('HTTP 503', message)
-        self.assertIn('response was interrupted', message)
-        self.ha.truncated_error_path = None
-        self.ha.stop()
-        self.assertEqual(self.hook(refused).returncode, 0)
-        self.ha.start()
-        self.ha.status = 200
-        config_only = self.deploy({'configuration.yaml': 'v2\n'}, source='e' * 40)
-        self.assertEqual(self.hook(config_only).returncode, 0)
-        self.assertEqual(len(self.ha.posts('/restart')), 4, 'lost a refused restart during an API outage')
-        self.assertEqual(len(self.ha.posts('/reload_all')), 1)
-
-        community = self.config / 'www' / 'community'
-        halfway = self.deploy({'custom_components/retry/manifest.json': 'v4', 'www/community/card/card.js': 'js'},
-                              source='f' * 40)
-        community.chmod(0o555)
-        self.addCleanup(community.chmod, 0o755)
-        self.assertNotEqual(self.hook(halfway).returncode, 0)
-        self.assertEqual((self.config / 'custom_components' / 'retry' / 'manifest.json').read_text(), 'v4')
-        community.chmod(0o755)
-        self.assertEqual(self.hook(halfway).returncode, 0)
-        self.assertEqual(len(self.ha.posts('/restart')), 5, 'lost the restart when the hook failed halfway')
-
-    def test_retries_notification_after_interrupted_error_response(self):
-        self.ha.start()
-        stray = self.deploy({'configuration.yaml': 'v1'})
-        self.ha.truncated_error_path = '/api/services/persistent_notification/create'
-        self.assertNotEqual(self.hook(stray).returncode, 0)
-        self.assertEqual(self.ha.notifications('deploy'), [])
-        self.ha.truncated_error_path = None
-        self.assertEqual(self.hook(stray).returncode, 0)
-        self.assertEqual(len(self.ha.notifications('deploy')), 1)
-
-    def test_retries_notifications_without_repeating_the_deploy(self):
-        self.ha.start()
-        self.ha.state = 'RUNNING'
-        plain = self.deploy({'configuration.yaml': 'v1\n'}, source='a' * 40)
-        self.assertEqual(self.hook(plain).returncode, 0)
-
-        self.ha.status = 502
-        self.ha.drop_notifications = True
-        refused = self.deploy({'custom_components/retry/manifest.json': 'v1'}, source='b' * 40)
-        for _ in range(2):
-            result = self.hook(refused)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn('not reachable', result.stderr)
-        self.assertEqual(len(self.ha.posts('/restart')), 1, 'repeated the restart to retry a notification')
-        self.ha.drop_notifications = False
-        for status in (429, 503):
-            self.ha.notification_status = status
-            self.assertNotEqual(self.hook(refused).returncode, 0)
-            self.assertEqual(self.ha.notifications('restart'), [])
-        self.assertEqual(len(self.ha.posts('/restart')), 1)
-        self.ha.notification_status = 200
-        self.assertEqual(self.hook(refused).returncode, 0)
-        self.assertIn('HTTP 502', self.ha.notifications('restart')[0]['message'])
-
-        self.ha.status = 500
-        self.ha.message = '錯誤' * 400
-        cut = self.deploy({'configuration.yaml': 'v2\n'}, source='c' * 40)
-        self.assertEqual(self.hook(cut).returncode, 0)
-        self.assertEqual(len(self.ha.notifications('restart')), 2, 'a notification cut in a character was rejected')
-        expected = json.dumps({'message': self.ha.message}, ensure_ascii=False).encode()[:1000]
-        self.assertTrue(self.ha.notifications('restart')[1]['message'].endswith(expected.decode(errors='ignore')))
-
-        self.ha.message = b'a' * 1000 + b'\0tail'
-        binary = self.deploy({'configuration.yaml': 'v3\n'}, source='d' * 40)
-        self.assertEqual(self.hook(binary).returncode, 0)
-        self.assertTrue(self.ha.notifications('restart')[-1]['message'].endswith('a' * 1000))
-
-    def test_restarts_quietly_and_retries_failed_hooks(self):
+    def test_restarts_quietly(self):
         self.ha.start()
         first = self.deploy({'configuration.yaml': 'v1\n'}, source='a' * 40)
         self.ha.state = 'RUNNING'
-        self.assertEqual(self.hook(first).returncode, 0)
+        result = self.hook(first)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len(self.ha.posts('/reload_all')), 1)
 
         posts = len(self.ha.posts())
         for start in ('a new clone', 'an existing clone'):
             name = self.start()
-            wait(lambda: self.ready(name), f'ready after starting with {start}', timeout=15)
+            self.wait_ready(name, f'ready after starting with {start}', timeout=15)
             time.sleep(3)
             self.assertEqual(len(self.ha.posts()), posts, f'starting with {start} reloaded or notified')
             self.stop(name)
-
-        second = self.deploy({'configuration.yaml': 'v2\n'}, source='b' * 40)
-        result = self.hook(second, token='bad-token')
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('rejected the token', result.stderr)
-        self.ha.state = 'NOT_RUNNING'
-        result = self.hook(second)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('still starting', result.stderr)
-        self.ha.stop()
-        result = self.hook(second)
-        self.assertNotEqual(result.returncode, 0, 'succeeded without Home Assistant')
-        self.assertIn('not reachable', result.stderr)
-        self.ha.state = 'RUNNING'
-        self.ha.start()
-        self.assertEqual(self.hook(second).returncode, 0)
-        self.assertEqual(len(self.ha.posts('/reload_all')), 2, 'a failed hook marked the deploy as reloaded')
-
-    def test_moving_aside_needs_write_access(self):
-        self.hacs_era_config()
-        www = self.config / 'www'
-        www.chmod(0o555)
-        self.addCleanup(www.chmod, 0o755)
-        commit = self.deploy({'configuration.yaml': 'v1\n', 'www/community/card/card.js': 'js'}, source='a' * 40)
-        result = self.hook(commit)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Cannot move /config/www/community aside', result.stderr)
-        self.assertEqual((self.config / 'configuration.yaml').read_text(), 'old\n')
 
 
 if __name__ == '__main__':

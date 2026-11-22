@@ -17,7 +17,7 @@ HA_GIT_SYNC_IMAGE=ha-git-sync:dev PYTHONPATH=. uv run --quiet --no-project --wit
 
 [tasks.lint]
 description = "Lint the scripts, workflows and actions"
-run = "shellcheck image/hook image/ready check/*.sh promote/*.sh && zizmor --quiet ."
+run = "shellcheck check/*.sh promote/*.sh && zizmor --quiet ."
 
 [tasks.check-config]
 description = "Check a configuration repository: mise run check-config -- PATH HOME_ASSISTANT_VERSION"

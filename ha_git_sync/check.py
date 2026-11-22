@@ -3,16 +3,14 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import tempfile
 
 import yaml
 
-from .build import INSTALLED
 from .errors import Error
+from .layout import COMPONENTS, CURRENT, layout
 
-CURRENT = '.git-sync/current'
-UNLINKED = ('custom_components', 'www')
+INSTALLED_ROOTS = (COMPONENTS, 'www')
 PLACEHOLDER = 'check-config-placeholder'
 # Fallback for files PyYAML cannot parse; check_config reports those files itself.
 SECRET = re.compile(r'''!secret[ \t]+(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#,\]}]+))''')
@@ -35,20 +33,6 @@ def check(deploy, placeholders=None):
     if any(problems.values()):
         raise Error('Home Assistant check_config reported problems')
     print('Home Assistant check_config passed')
-
-
-def layout(deploy, config):
-    """Mirror the sidecar: top-level entries linked into the checkout, integrations and cards copied out of it."""
-    (config / CURRENT).parent.mkdir(parents=True)
-    (config / CURRENT).symlink_to(deploy)
-    for entry in sorted(deploy.iterdir()):
-        if not entry.name.startswith('.') and entry.name not in UNLINKED:
-            (config / entry.name).symlink_to(f'{CURRENT}/{entry.name}')
-    for name in INSTALLED:
-        if (deploy / name).is_dir():
-            shutil.copytree(deploy / name, config / name)
-        else:
-            (config / name).mkdir(parents=True)
 
 
 def relative(message, config, deploy):
@@ -96,7 +80,7 @@ def secret_names(config):
     pending = []
     for directory, dirs, files in os.walk(config, followlinks=True):
         if Path(directory) == config:
-            dirs[:] = [name for name in dirs if not name.startswith('.') and name not in UNLINKED]
+            dirs[:] = [name for name in dirs if not name.startswith('.') and name not in INSTALLED_ROOTS]
         pending.extend(Path(directory, name) for name in files if name.endswith(('.yaml', '.yml')))
     names = set()
     seen = set()

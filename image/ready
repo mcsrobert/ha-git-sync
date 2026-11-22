@@ -1,7 +1,6 @@
-#!/bin/bash
-# A rejected tip can use the last fully installed, retained configuration.
-cd /config/.git-sync || exit 1
-tip=$(readlink incoming) &&
-  installed=$(head -n 1 state/installed 2> /dev/null) &&
-  [[ -n $installed && $(readlink current) == state/trees/* && -f current/configuration.yaml &&
-    (${tip##*/} == "$installed" || ${tip##*/} == "$(cat state/rejected 2> /dev/null)") ]]
+#!/usr/local/bin/python3 -EB
+import sys
+
+from ha_git_sync.sidecar import ready
+
+sys.exit(0 if ready() else 1)

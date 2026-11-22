@@ -39,7 +39,7 @@ class Deploy(unittest.TestCase):
 
 
 class LayoutTest(Deploy):
-    def test_links_top_level_entries_and_copies_integrations_and_cards(self):
+    def test_links_top_level_entries_and_copies_cards(self):
         self.write('blueprints/automation/b.yaml', 'blueprint:\n')
         self.write('.gitignore', '/*\n')
         self.write('custom_components/x/manifest.json', '{}')
@@ -47,12 +47,13 @@ class LayoutTest(Deploy):
         config = self.layout()
         self.assertEqual((config / '.git-sync' / 'current').resolve(), self.deploy.resolve())
         links = {path.name: str(path.readlink()) for path in config.iterdir() if path.is_symlink()}
-        self.assertEqual(links, {name: f'.git-sync/current/{name}'
-                                 for name in ('automations', 'blueprints', 'configuration.yaml')})
+        self.assertEqual(links, {name: f'.git-sync/current/{name}' for name in
+                                 ('automations', 'blueprints', 'configuration.yaml', 'custom_components')})
         self.assertTrue((config / 'blueprints' / 'automation' / 'b.yaml').is_file())
-        for name in ('custom_components/x/manifest.json', 'www/community/card/card.js'):
-            self.assertFalse((config / name).is_symlink())
-            self.assertTrue((config / name).is_file(), name)
+        self.assertTrue((config / 'custom_components' / 'x' / 'manifest.json').is_file())
+        self.assertFalse((config / 'www').is_symlink())
+        self.assertFalse((config / 'www' / 'community').is_symlink())
+        self.assertTrue((config / 'www' / 'community' / 'card' / 'card.js').is_file())
 
     def test_creates_empty_install_folders(self):
         config = self.layout()
