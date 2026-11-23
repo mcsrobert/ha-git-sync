@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/mcsrobert/ha-git-sync/compare/v0.2.1...v0.3.0) (2026-11-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **hook:** /config/custom_components is now a link to .git-sync/current/custom_components instead of a copy. The first deploy with this version replaces the copies earlier versions made, without restarting Home Assistant. The image is now based on python:3.14-slim with git, ssh and the git-sync binary, instead of the git-sync image. It runs as the same user with the same settings, but no longer contains the other tools of the git-sync image, and has no setuid or setgid programs, because /etc/passwd stays writable for GITSYNC_ADD_USER.
+
+### Features
+
+* **hook:** rewrite the sidecar in Python and switch each deploy at once ([ad84e5d](https://github.com/mcsrobert/ha-git-sync/commit/ad84e5da0382518d9c0dc91e7b054155f2651a43))
+
+
+### Bug Fixes
+
+* **deps:** update dependency python to v3.15.2 ([43dddab](https://github.com/mcsrobert/ha-git-sync/commit/43dddab917dbef54a566eff80268ee10a9db9303))
+
 ## [0.2.1](https://github.com/mcsrobert/ha-git-sync/compare/v0.2.0...v0.2.1) (2026-11-21)
 
 
