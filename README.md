@@ -153,9 +153,13 @@ With Renovate, extend the preset to keep `hacs.yaml` and `home-assistant-version
 
 The sidecar mounts Home Assistant's `/config` volume and reads two files from `/etc/git-secret`:
 
-- `ssh`: a read-only deploy key for the repository. For HTTPS, use git-sync's `GITSYNC_USERNAME` and
-  `GITSYNC_PASSWORD_FILE` instead.
+- `ssh`: a read-only deploy key for the repository.
 - `ha-token`: a long-lived access token of an administrator, which `reload_all` and `restart` require.
+
+To clone over HTTPS instead, set `GITSYNC_REPO` to the `https://` URL and leave out `ssh`. With a GitHub App that can
+read the repository's contents, set `GITSYNC_GITHUB_APP_APPLICATION_ID`, `GITSYNC_GITHUB_APP_INSTALLATION_ID` and
+`GITSYNC_GITHUB_APP_PRIVATE_KEY_FILE`: git-sync exchanges the key for short-lived tokens, so nothing expires. With a
+token, set `GITSYNC_USERNAME` and `GITSYNC_PASSWORD_FILE`.
 
 On Kubernetes, add it to the Home Assistant pod as a native sidecar, with a Secret at `/etc/git-secret` and an
 `emptyDir` at `/tmp`. Its startup probe holds Home Assistant back until the first deploy is in place; after that,
