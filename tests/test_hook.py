@@ -343,31 +343,29 @@ class HookTest(DeployTest):
         self.assertIn('HTTP 302', result.stderr)
         self.assertEqual(elsewhere.requests, [], 'followed the redirect with the token')
 
-    def test_ready_once_the_tip_is_installed_or_rejected(self):
+    @unittest.skipIf(AS_ROOT, 'root reads unreadable files')
+    def test_ready_once_a_deploy_is_installed(self):
         self.ha.start()
         self.ha.state = 'RUNNING'
-        incoming = self.config / '.git-sync' / 'incoming'
-
-        def tip(commit):
-            incoming.unlink(missing_ok=True)
-            incoming.symlink_to(f'repo/.worktrees/{commit}')
 
         self.assertFalse(sidecar.ready(self.config))
         first = self.deploy({'configuration.yaml': 'v1\n'}, source='a' * 40)
-        (self.config / '.git-sync').mkdir()
-        tip(first)
         self.assertFalse(sidecar.ready(self.config), 'ready before the first install')
         self.assertEqual(self.hook(first).returncode, 0)
         self.assertTrue(sidecar.ready(self.config))
 
         second = self.deploy({'configuration.yaml': 'v2\n'}, source='b' * 40)
-        tip(second)
-        self.assertFalse(sidecar.ready(self.config), 'ready before installing the new tip')
+        unreadable = self.work / 'configuration.yaml'
+        unreadable.chmod(0)
+        try:
+            self.assertNotEqual(self.hook(second).returncode, 0)
+        finally:
+            unreadable.chmod(0o644)
+        self.assertEqual((self.config / 'configuration.yaml').read_text(), 'v1\n')
+        self.assertTrue(sidecar.ready(self.config), 'a deploy that failed to install kept Home Assistant from starting')
         stray = self.deploy({'configuration.yaml': 'stray\n'})
-        tip(stray)
         self.assertEqual(self.hook(stray).returncode, 0)
         self.assertTrue(sidecar.ready(self.config), 'a rejected tip kept Home Assistant from starting')
-
 
 if __name__ == '__main__':
     unittest.main()

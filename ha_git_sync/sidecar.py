@@ -53,7 +53,7 @@ class Sidecar:
             if self.read('rejected') != commit:
                 self.notify('deploy', 'Configuration not deployed',
                             f'The deployed branch is at {commit[:7]}, which CI did not build, so nothing was '
-                            'installed or reloaded. The next CI run on the main branch restores it.')
+                            'installed or reloaded. Home Assistant keeps the last deploy until CI promotes a new one.')
                 self.write('rejected', commit)
             self.restore()
             self.send_notifications()
@@ -318,13 +318,11 @@ class Sidecar:
 
 
 def ready(config=CONFIG):
-    """Whether /config holds a complete deploy and git-sync's tip is that deploy, or a commit the hook rejected."""
+    """Whether /config holds a complete deploy. A newer commit the hook has not installed yet, or fails to install,
+    does not hold Home Assistant back: it starts with the last deploy, and the hook applies the new one later."""
     sidecar = Sidecar(config, None, '')
-    tip = readlink(sidecar.root / 'incoming')
-    installed = sidecar.read('installed')
-    return bool(tip and installed and (readlink(sidecar.root / 'current') or '').startswith('state/trees/')
-                and (sidecar.root / 'current' / 'configuration.yaml').is_file()
-                and Path(tip).name in (installed, sidecar.read('rejected')))
+    return bool(sidecar.read('installed') and (readlink(sidecar.root / 'current') or '').startswith('state/trees/')
+                and (sidecar.root / 'current' / 'configuration.yaml').is_file())
 
 
 def excerpt(body):

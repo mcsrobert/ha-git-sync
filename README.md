@@ -33,9 +33,9 @@ The UI editors still save `automations.yaml`, `scripts.yaml` and `scenes.yaml` t
 load them. The hook raises a notification when one appears, so you can move the change into Git and delete the file.
 
 The hook also raises a notification when a reload or restart fails, and when `deployed` points at a commit `promote`
-did not make. It does not install or reload such a commit, and the next run on `main` restores `deployed`. A refused
-restart stays due, so the next deploy restarts instead of reloading. Home Assistant checks the configuration with the
-integrations it runs, so when a configuration change needs the new ones, restart Home Assistant yourself.
+did not make. It does not install or reload such a commit, and keeps the last deploy until `promote` runs again. A
+refused restart stays due, so the next deploy restarts instead of reloading. Home Assistant checks the configuration
+with the integrations it runs, so when a configuration change needs the new ones, restart Home Assistant yourself.
 
 The trailer check stands in for branch protection, which GitHub Free does not offer private repositories: with it, a
 stray push or a hand-made commit on `deployed` never reaches Home Assistant. It guards against mistakes, not against
@@ -158,7 +158,8 @@ The sidecar mounts Home Assistant's `/config` volume and reads two files from `/
 - `ha-token`: a long-lived access token of an administrator, which `reload_all` and `restart` require.
 
 On Kubernetes, add it to the Home Assistant pod as a native sidecar, with a Secret at `/etc/git-secret` and an
-`emptyDir` at `/tmp`. Its startup probe holds Home Assistant back until the first deploy is in place. The image runs as
+`emptyDir` at `/tmp`. Its startup probe holds Home Assistant back until the first deploy is in place; after that,
+Home Assistant starts with the last deploy, and the hook applies newer ones once they are installed. The image runs as
 user 65533, so set the pod's `fsGroup` to Home Assistant's group.
 
 ```yaml
@@ -225,8 +226,8 @@ trusts GitHub's SSH host keys; for another Git host, mount its keys and set `GIT
 
 - Revert the change on `main`. CI checks and promotes the revert.
 - To go back without waiting for CI, push an earlier deploy: `git push --force origin <commit>:deployed`. It keeps its
-  `Source-Commit:` trailer, so the hook installs it and reloads or restarts Home Assistant. The next run on `main`, at
-  the latest the nightly one, deploys `main` again.
+  `Source-Commit:` trailer, so the hook installs it and reloads or restarts Home Assistant. The next run on `main`
+  deploys `main` again.
 
 ## Development
 
