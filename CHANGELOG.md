@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0](https://github.com/mcsrobert/ha-git-sync/compare/v0.3.1...v0.4.0) (2026-11-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **hook:** the files a deploy links into /config, except custom_components and www, now carry the time of the switch instead of git-sync's checkout. Anything that compares those times with the commit should read the commit instead.
+* **check:** with lovelace: resource_mode: yaml, check fails unless every card in hacs.yaml has a resource under lovelace: resources: at one of its files, ending in ?v=<version> with the version from hacs.yaml, and every /local/community resource belongs to such a card. Add or fix the resources it lists. Configurations with resources in the UI are not affected.
+
+### Features
+
+* **check:** check YAML dashboards and card resources ([7f7ba02](https://github.com/mcsrobert/ha-git-sync/commit/7f7ba022da62acfca92c88d277032dec62cd9841))
+* **renovate:** update the ?v= of card resources with the card ([c5264b2](https://github.com/mcsrobert/ha-git-sync/commit/c5264b2ad896b67c4431e46470d0af1a61642bae))
+
+
+### Bug Fixes
+
+* **hook:** date each new deploy's files after the switch ([d1fd1f8](https://github.com/mcsrobert/ha-git-sync/commit/d1fd1f885eeaefbd8fe96f864ad49512997e348f))
+
 ## [0.3.1](https://github.com/mcsrobert/ha-git-sync/compare/v0.3.0...v0.3.1) (2026-11-23)
 
 
