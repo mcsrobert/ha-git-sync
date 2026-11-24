@@ -89,6 +89,33 @@ class HookTest(DeployTest):
         self.assertEqual(len(self.ha.posts('/restart')), 1, 'restarted although no integration changed')
         self.assertEqual(self.ha.posts('/reload_all'), [])
 
+    def test_dates_a_new_deploy_after_the_switch_also_when_a_hook_run_retries_it(self):
+        self.ha.start()
+        self.ha.state = 'RUNNING'
+        first = self.deploy({'configuration.yaml': 'v1', 'dashboards/home.yaml': 'views: !include views.yaml\n',
+                             'dashboards/views.yaml': '[]\n'}, source='a' * 40)
+        self.assertEqual(self.hook(first).returncode, 0)
+        installed = (self.config / '.git-sync/state/installed').read_text()
+        second = self.deploy({'dashboards/views.yaml': '[{}]\n'}, source='b' * 40)
+        home, views = self.config / 'dashboards/home.yaml', self.config / 'dashboards/views.yaml'
+
+        def checked_out_before_the_switch():
+            for name in ('dashboards/home.yaml', 'dashboards/views.yaml'):
+                os.utime(self.work / name, (1, 1))
+                if (self.config / name).exists():
+                    os.utime(self.config / name, (1, 1))
+
+        checked_out_before_the_switch()
+        self.assertEqual(self.hook(second).returncode, 0)
+        self.assertEqual(views.read_text(), '[{}]\n')
+        self.assertGreater(home.stat().st_mtime, 1, 'a dashboard whose include changed kept its cached copy')
+        self.assertGreater(views.stat().st_mtime, 1)
+
+        checked_out_before_the_switch()
+        (self.config / '.git-sync/state/installed').write_text(installed)  # Stopped after the switch.
+        self.assertEqual(self.hook(second).returncode, 0)
+        self.assertGreater(home.stat().st_mtime, 1, 'a retried install left the checkout times')
+
     def test_rollback_after_startup_reloads_the_restored_configuration(self):
         self.ha.start()
         self.ha.state = 'RUNNING'

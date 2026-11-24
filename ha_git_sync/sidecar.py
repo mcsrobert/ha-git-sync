@@ -91,6 +91,8 @@ class Sidecar:
         if components != (installed[2] if len(installed) == 4 else ''):
             self.write('restart', commit)
         self.switch(content)
+        if content != (installed[1] if len(installed) == 4 else ''):
+            touch(snapshot)
         self.link(names)
         self.install_cards(snapshot / CARDS, cards, commit)
         self.write('installed', commit, content, components, cards)
@@ -349,6 +351,17 @@ def aside(path):
         raise Error(f'Cannot move {path} aside; give this container write access to {path.parent}, '
                     'or move it yourself') from None
     print(f'Moved {path} to {backup}')
+
+
+def touch(snapshot):
+    """Date the files of a new deploy once current points at it. The snapshot keeps the times of git-sync's checkout,
+    so Home Assistant could keep what it cached from the old tree in between: a YAML dashboard is read again only when
+    its own file is newer, even when only a file it includes changed."""
+    for directory, dirs, files in os.walk(snapshot):
+        if Path(directory) == snapshot:
+            dirs[:] = [name for name in dirs if name not in ('www', COMPONENTS)]
+        for name in files:
+            os.utime(Path(directory, name))
 
 
 def unmanaged_file(path):
