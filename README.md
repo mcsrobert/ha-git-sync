@@ -103,8 +103,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  schedule:
-    - cron: '23 4 * * *'
   workflow_dispatch:
 
 permissions: {}
