@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "Update the integrations and cards pinned in hacs.yaml, and the Home Assistant release the ha-git-sync check action uses",
+  "description": "Update the integrations and cards pinned in hacs.yaml, their dashboard resources, and the Home Assistant release the ha-git-sync check action uses",
   "customManagers": [
     {
       "description": "Update release assets in hacs.yaml",
@@ -24,6 +24,14 @@
       "managerFilePatterns": ["/(^|/)hacs\\.yaml$/"],
       "matchStrings": ["repository: (?<depName>\\S+)\\n\\s+version: [\"']?(?<currentValue>[^\"'\\s]+)[\"']?\\n\\s+commit: [\"']?(?<currentDigest>[0-9a-f]{40})[\"']?"],
       "datasourceTemplate": "github-tags",
+      "versioningTemplate": "regex:^[vV]?(?<major>\\d+)(?:\\.(?<minor>\\d+))?(?:\\.(?<patch>\\d+))?(?<prerelease>[-.]?[a-zA-Z].*)?$"
+    },
+    {
+      "description": "Update the ?v= of dashboard resources below a # renovate: repository= comment, on the card's branch",
+      "customType": "regex",
+      "managerFilePatterns": ["/\\.ya?ml$/"],
+      "matchStrings": ["# renovate: repository=(?<depName>\\S+)(?: datasource=(?<datasource>\\S+))?\\r?\\n\\s*(?:- )?url: [\"']?[^\"'\\s?]+\\?v=(?<currentValue>[^\"'\\s&#]+)"],
+      "datasourceTemplate": "{{#if datasource}}{{{datasource}}}{{else}}github-releases{{/if}}",
       "versioningTemplate": "regex:^[vV]?(?<major>\\d+)(?:\\.(?<minor>\\d+))?(?:\\.(?<patch>\\d+))?(?<prerelease>[-.]?[a-zA-Z].*)?$"
     },
     {
