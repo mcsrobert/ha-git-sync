@@ -9,7 +9,8 @@ main ─────────> check ─> promote ─> deployed ─> sidecar 
 ```
 
 - **`check`**, a GitHub Action, scans for leaked secrets, downloads the custom integrations and cards pinned in
-  `hacs.yaml`, and runs Home Assistant's `check_config` on the result.
+  `hacs.yaml`, and runs Home Assistant's `check_config` on the result, plus checks of the YAML dashboards and card
+  resources it leaves out.
 - **`promote`**, a GitHub Action, commits the tree `check` built on `main` to the `deployed` branch.
 - **The sidecar** runs next to Home Assistant. It is [git-sync](https://github.com/kubernetes/git-sync) following
   `deployed`, plus a hook that puts the checkout in `/config` and calls `homeassistant.reload_all`. When custom
@@ -85,7 +86,25 @@ integrations:
     asset: hacs.zip
 ```
 
-Load cards from `/local/community/<repository>/<file>`. A changed card needs a browser refresh, not a restart.
+Load cards from `/local/community/<repository>/<file>`. Home Assistant serves `/local` with a month-long browser cache,
+so keep the resources in YAML and end each URL in `?v=` and the card's version. In that mode, `check` fails when a card
+has no resource, a resource names no installed file, or its `?v=` differs from the version in `hacs.yaml`. With
+Renovate and the preset, a `# renovate: repository=` comment directly above the `url` line updates `?v=` on the card's
+branch. For a card pinned by `commit`, add ` datasource=github-tags` to the comment.
+
+```yaml
+lovelace:
+  resource_mode: yaml
+  resources:
+    # renovate: repository=RomRider/apexcharts-card
+    - url: /local/community/apexcharts-card/apexcharts-card.js?v=v2.2.3
+      type: module
+```
+
+`reload_all` does not reload resources, so a changed resource takes a restart, or an automation that runs
+`lovelace.reload_resources` on the `automation_reloaded` event. `check` also loads every dashboard declared with
+`mode: yaml`, which `check_config` leaves out. An edited dashboard shows on the next page load; adding or removing one
+needs a restart.
 
 ## Setup
 

@@ -1,17 +1,21 @@
 """Run Home Assistant's check_config on a deploy tree, laid out the way the sidecar links it into /config."""
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import tempfile
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import yaml
 
+from . import sources
 from .errors import Error
-from .layout import COMPONENTS, CURRENT, layout
+from .layout import CARDS, COMPONENTS, CURRENT, layout
 
 INSTALLED_ROOTS = (COMPONENTS, 'www')
 PLACEHOLDER = 'check-config-placeholder'
+CARD_URL = '/local/community/'
 # Fallback for files PyYAML cannot parse; check_config reports those files itself.
 SECRET = re.compile(r'''!secret[ \t]+(?:"([^"\n]+)"|'([^'\n]+)'|([^\s#,\]}]+))''')
 
@@ -25,14 +29,73 @@ def check(deploy, placeholders=None):
         layout(deploy, config)
         write_placeholder_secrets(config, placeholders)
         result = check_config.check(str(config))
+        lovelace = (result.get('components') or {}).get('lovelace')
+        frontend = lovelace_problems(config, deploy, lovelace) if lovelace else []
     problems = {}
     for kind, key in (('errors', 'except'), ('warnings', 'warn')):
         problems[kind] = {domain: [relative(message, config, deploy) for message in messages if isinstance(message, str)]
                           for domain, messages in result[key].items()}
+    if frontend:
+        problems['errors'].setdefault('lovelace', []).extend(relative(message, config, deploy) for message in frontend)
     print(json.dumps(problems, indent=2))
     if any(problems.values()):
         raise Error('Home Assistant check_config reported problems')
     print('Home Assistant check_config passed')
+
+
+def lovelace_problems(config, deploy, lovelace):
+    """What check_config leaves out of the lovelace block: whether the YAML dashboards load, and whether the card
+    resources match the cards in hacs.yaml."""
+    from homeassistant.exceptions import HomeAssistantError
+    from homeassistant.util.yaml import Secrets, load_yaml_dict
+
+    problems = []
+    dashboards = dict(lovelace.get('dashboards') or {})
+    if lovelace.get('mode') == 'yaml' and 'lovelace' not in dashboards:
+        dashboards['lovelace'] = {'filename': 'ui-lovelace.yaml'}  # Home Assistant's deprecated YAML Overview.
+    for url_path, dashboard in dashboards.items():
+        filename = dashboard['filename']
+        path = PurePosixPath(filename)
+        if path.is_relative_to('/config'):
+            path = path.relative_to('/config')
+        try:
+            load_yaml_dict(config / path, Secrets(config))
+        except FileNotFoundError:
+            problems.append(f'Dashboard {url_path}: {filename} does not exist')
+        except HomeAssistantError as error:
+            problems.append(f'Dashboard {url_path}: {filename} does not load: {error}')
+    if lovelace.get('resource_mode', lovelace.get('mode')) == 'yaml':
+        problems += resource_problems(deploy, lovelace.get('resources') or [])
+    return problems
+
+
+def resource_problems(deploy, resources):
+    """Every card hacs.yaml installs needs a resource at one of its files, ending in ?v= and the card's version:
+    browsers cache /local for a month, so a URL that does not change with the card keeps the old one."""
+    hacs = deploy / 'hacs.yaml'
+    cards = {item.name: item.version for item in (sources.load(hacs.read_text()) if hacs.is_file() else [])
+             if item.category == 'cards'}
+    problems = []
+    loaded = set()
+    for resource in resources:
+        url = resource.get('url') or ''
+        parts = urlsplit(url)
+        path = posixpath.normpath(unquote(parts.path))
+        if parts.scheme or parts.netloc or not path.startswith(CARD_URL):
+            continue
+        name, _, file = path.removeprefix(CARD_URL).partition('/')
+        if name not in cards:
+            problems.append(f'Resource {url}: no card in hacs.yaml installs {CARDS}/{name}')
+            continue
+        loaded.add(name)
+        if not (deploy / CARDS / name / file).is_file():
+            problems.append(f'Resource {url}: {name} installs no file {file!r}')
+        if parse_qs(parts.query.replace('+', '%2B')).get('v') != [cards[name]]:
+            problems.append(f'Resource {url}: end it in ?v={cards[name]}, the version of {name} in hacs.yaml, '
+                            'so browsers load the new file when the card changes')
+    for name in sorted(set(cards) - loaded):
+        problems.append(f'Card {name} in hacs.yaml has no resource under lovelace: resources:')
+    return problems
 
 
 def relative(message, config, deploy):
