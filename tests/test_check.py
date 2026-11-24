@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 from pathlib import Path
 import shutil
 import sys
@@ -130,12 +131,25 @@ class CheckTest(Deploy):
             self.seen['configuration'] = (path / 'configuration.yaml').read_text()
             return result(path) if callable(result) else result
 
+        class HomeAssistantError(Exception):
+            pass
+
+        def load_yaml_dict(path, secrets):
+            try:
+                return yaml.safe_load(Path(path).read_text()) or {}
+            except yaml.YAMLError as error:
+                raise HomeAssistantError('invalid YAML') from error
+
         self.seen = {}
         scripts = types.ModuleType('homeassistant.scripts')
         scripts.check_config = types.SimpleNamespace(check=check)
+        exceptions = types.SimpleNamespace(HomeAssistantError=HomeAssistantError)
+        util_yaml = types.SimpleNamespace(Secrets=lambda path: None, load_yaml_dict=load_yaml_dict)
         homeassistant = types.ModuleType('homeassistant')
         homeassistant.scripts = scripts
-        return mock.patch.dict(sys.modules, {'homeassistant': homeassistant, 'homeassistant.scripts': scripts})
+        return mock.patch.dict(sys.modules, {'homeassistant': homeassistant, 'homeassistant.scripts': scripts,
+                                             'homeassistant.exceptions': exceptions,
+                                             'homeassistant.util.yaml': util_yaml})
 
     def test_checks_the_layout_with_placeholder_secrets_and_leaves_the_deploy_tree_untouched(self):
         before = sorted(path.relative_to(self.deploy) for path in self.deploy.rglob('*'))
@@ -156,6 +170,88 @@ class CheckTest(Deploy):
                 check(self.deploy)
         self.assertIn('"automations/a.yaml is bad"', log.getvalue())
         self.assertIn('"includes/template.yaml is odd"', log.getvalue())
+
+    def lovelace(self, **lovelace):
+        self.write('hacs.yaml', 'cards:\n  - repository: RomRider/apexcharts-card\n    version: v2.2.3\n'
+                   '    asset: apexcharts-card.js\n  - repository: madmicio/LG-WebOS-Remote-Control\n'
+                   '    version: 2.1.0\n    asset: lg-remote-control.js\n')
+        self.write('www/community/apexcharts-card/apexcharts-card.js', 'js')
+        self.write('www/community/LG-WebOS-Remote-Control/lg-remote-control.js', 'js')
+        self.write('dashboards/home.yaml', 'views: []\n')
+        defaults = {'mode': 'storage', 'resource_mode': 'yaml',
+                    'dashboards': {'dashboard-home': {'mode': 'yaml', 'filename': 'dashboards/home.yaml'}},
+                    'resources': [
+                        {'url': '/local/community/apexcharts-card/apexcharts-card.js?v=v2.2.3', 'type': 'module'},
+                        {'url': '/local/community/LG-WebOS-Remote-Control/lg-remote-control.js?v=2.1.0',
+                         'type': 'module'},
+                        {'url': 'https://cdn.example.com/card.js', 'type': 'module'},
+                        {'url': '/local/my-card.js', 'type': 'module'},
+                    ]}
+        return {'except': {}, 'warn': {}, 'components': {'lovelace': {**defaults, **lovelace}}}
+
+    def lovelace_errors(self, result):
+        with self.fake_check_config(result), contextlib.redirect_stdout(io.StringIO()) as log:
+            try:
+                check(self.deploy)
+            except Error:
+                return json.loads(log.getvalue())['errors']['lovelace']
+        return []
+
+    def test_passes_dashboards_that_load_and_a_resource_per_card_at_its_version(self):
+        self.assertEqual(self.lovelace_errors(self.lovelace()), [])
+
+    def test_reports_dashboards_that_are_missing_or_do_not_load(self):
+        self.write('dashboards/broken.yaml', 'views: [\n')
+        result = self.lovelace(dashboards={
+            'dashboard-home': {'mode': 'yaml', 'filename': 'dashboards/home.yaml'},
+            'dashboard-gone': {'mode': 'yaml', 'filename': 'dashboards/gone.yaml'},
+            'dashboard-broken': {'mode': 'yaml', 'filename': 'dashboards/broken.yaml'},
+        })
+        self.assertEqual(self.lovelace_errors(result), [
+            'Dashboard dashboard-gone: dashboards/gone.yaml does not exist',
+            'Dashboard dashboard-broken: dashboards/broken.yaml does not load: invalid YAML',
+        ])
+
+    def test_reports_resources_that_do_not_match_the_cards(self):
+        result = self.lovelace(resources=[
+            {'url': '/local/community/apexcharts-card/apexcharts-card.js?v=v2.2.2', 'type': 'module'},
+            {'url': '/local/community/apexcharts-card/missing.js?v=v2.2.3', 'type': 'module'},
+            {'url': '/local/community/weather-chart-card/weather-chart-card.js?v=1', 'type': 'module'},
+        ])
+        self.assertEqual(self.lovelace_errors(result), [
+            'Resource /local/community/apexcharts-card/apexcharts-card.js?v=v2.2.2: end it in ?v=v2.2.3, the version '
+            'of apexcharts-card in hacs.yaml, so browsers load the new file when the card changes',
+            "Resource /local/community/apexcharts-card/missing.js?v=v2.2.3: apexcharts-card installs no file "
+            "'missing.js'",
+            'Resource /local/community/weather-chart-card/weather-chart-card.js?v=1: no card in hacs.yaml installs '
+            'www/community/weather-chart-card',
+            'Card LG-WebOS-Remote-Control in hacs.yaml has no resource under lovelace: resources:',
+        ])
+
+    def test_resolves_dashboards_like_home_assistant(self):
+        self.write('ui-lovelace.yaml', 'views: []\n')
+        absolute = self.lovelace(dashboards={'dashboard-home': {'mode': 'yaml', 'filename': '/config/dashboards/home.yaml'}})
+        self.assertEqual(self.lovelace_errors(absolute), [])
+        (self.deploy / 'ui-lovelace.yaml').unlink()
+        self.assertEqual(self.lovelace_errors(self.lovelace(mode='yaml')),
+                         ['Dashboard lovelace: ui-lovelace.yaml does not exist'])
+
+    def test_counts_a_resource_for_the_card_its_path_resolves_to(self):
+        result = self.lovelace(dashboards={}, resources=[
+            {'url': '/local/community/card/card.js?v=1.0+build', 'type': 'module'},
+            {'url': '/local/community/card/../other/other.js?v=v1', 'type': 'module'},
+        ])
+        self.write('hacs.yaml', 'cards:\n  - repository: o/card\n    version: 1.0+build\n    asset: card.js\n'
+                   '  - repository: o/other\n    version: v1\n    asset: other.js\n')
+        self.write('www/community/card/card.js', 'js')
+        self.write('www/community/other/other.js', 'js')
+        self.assertEqual(self.lovelace_errors(result), [])
+        result['components']['lovelace']['resources'][1]['url'] = '/local/community/other/../card/card.js?v=1.0+build'
+        self.assertEqual(self.lovelace_errors(result),
+                         ['Card other in hacs.yaml has no resource under lovelace: resources:'])
+
+    def test_leaves_resources_in_storage_mode_to_the_ui(self):
+        self.assertEqual(self.lovelace_errors(self.lovelace(resource_mode='storage', resources=[])), [])
 
     def test_cli_uses_typed_overrides_from_a_file(self):
         self.write('includes/template.yaml', 'port: !secret server_port\nenabled: !secret enabled\n')
