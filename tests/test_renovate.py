@@ -51,7 +51,7 @@ class ResourceManagerTest(unittest.TestCase):
         text = ('lovelace:\n  resource_mode: yaml\n  resources:\n'
                 '    # renovate: repository=RomRider/apexcharts-card\n'
                 '    - url: /local/community/apexcharts-card/apexcharts-card.js?v=v2.2.3\n      type: module\n'
-                '    # renovate: repository=o/card datasource=github-tags\n'
+                '    # renovate: datasource=github-tags repository=o/card\n'
                 '    - type: module\n      url: "/local/community/card/card.js?v=V2.4.11"\n'
                 '    - url: /local/community/other/other.js?v=1.0.0\n')
         self.assertEqual(self.extract(text), [
@@ -60,6 +60,12 @@ class ResourceManagerTest(unittest.TestCase):
         text = text.replace('    - type: module\n      url:', '    - url:')
         self.assertEqual(self.extract(text)[1], {'depName': 'o/card', 'datasource': 'github-tags',
                                                  'currentValue': 'V2.4.11'})
+
+    def test_takes_the_datasource_before_the_repository(self):
+        text = '    # renovate: datasource=github-tags repository=o/card\n    - url: /local/community/card/card.js?v=v1.0.0\n'
+        self.assertEqual(self.extract(text), [
+            {'depName': 'o/card', 'datasource': 'github-tags', 'currentValue': 'v1.0.0'},
+        ])
 
     def test_matches_files_with_windows_line_endings(self):
         text = ('    # renovate: repository=o/card\r\n'
