@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/mcsrobert/ha-git-sync/compare/v0.4.0...v0.5.0) (2026-11-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* **renovate:** put `datasource=` before `repository=` in every `# renovate:` comment that names one, for example `# renovate: datasource=github-tags repository=o/card`. Comments in the old order are no longer updated.
+
+### Features
+
+* **renovate:** read datasource before repository in resource comments ([fa182ee](https://github.com/mcsrobert/ha-git-sync/commit/fa182ee80ca31b6af67dbd5dff74099de559fa40))
+
 ## [0.4.0](https://github.com/mcsrobert/ha-git-sync/compare/v0.3.1...v0.4.0) (2026-11-24)
 
 
