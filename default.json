@@ -30,7 +30,7 @@
       "description": "Update the ?v= of dashboard resources below a # renovate: repository= comment, on the card's branch",
       "customType": "regex",
       "managerFilePatterns": ["/\\.ya?ml$/"],
-      "matchStrings": ["# renovate: repository=(?<depName>\\S+)(?: datasource=(?<datasource>\\S+))?\\r?\\n\\s*(?:- )?url: [\"']?[^\"'\\s?]+\\?v=(?<currentValue>[^\"'\\s&#]+)"],
+      "matchStrings": ["# renovate: (?:datasource=(?<datasource>\\S+) )?repository=(?<depName>\\S+)\\r?\\n\\s*(?:- )?url: [\"']?[^\"'\\s?]+\\?v=(?<currentValue>[^\"'\\s&#]+)"],
       "datasourceTemplate": "{{#if datasource}}{{{datasource}}}{{else}}github-releases{{/if}}",
       "versioningTemplate": "regex:^[vV]?(?<major>\\d+)(?:\\.(?<minor>\\d+))?(?:\\.(?<patch>\\d+))?(?<prerelease>[-.]?[a-zA-Z].*)?$"
     },

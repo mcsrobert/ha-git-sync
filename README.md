@@ -90,7 +90,8 @@ Load cards from `/local/community/<repository>/<file>`. Home Assistant serves `/
 so keep the resources in YAML and end each URL in `?v=` and the card's version. In that mode, `check` fails when a card
 has no resource, a resource names no installed file, or its `?v=` differs from the version in `hacs.yaml`. With
 Renovate and the preset, a `# renovate: repository=` comment directly above the `url` line updates `?v=` on the card's
-branch. For a card pinned by `commit`, add ` datasource=github-tags` to the comment.
+branch. For a card pinned by `commit`, put `datasource=github-tags` before `repository=` in the comment, as in
+`# renovate: datasource=github-tags repository=o/card`.
 
 ```yaml
 lovelace:
