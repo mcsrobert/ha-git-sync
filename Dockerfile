@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM registry.k8s.io/git-sync/git-sync:v4.8.0@sha256:a20644562fba94773e594885cb001aadb5a3172175f13ac1215e5b2033c9200e AS git-sync
+FROM registry.k8s.io/git-sync/git-sync:v4.8.1@sha256:6eabb33faf08810811756f364a8e2ec9a3a2622363352e469f7bef78cc2294f5 AS git-sync
 
 FROM python:3.15.2-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
